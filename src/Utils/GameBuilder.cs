@@ -238,6 +238,16 @@ public class GameBuilder
     }
 
     /// <summary>
+    /// Add a new flexible win condition (room, item, npc_defeat, or quest_complete).
+    /// </summary>
+    public GameBuilder AddWinCondition(WinCondition condition)
+    {
+        _game.WinConditions ??= new();
+        _game.WinConditions.Add(condition);
+        return this;
+    }
+
+    /// <summary>
     /// Set whether player can go anywhere or is limited.
     /// </summary>
     public GameBuilder WithFreeRoam(bool enabled = true)

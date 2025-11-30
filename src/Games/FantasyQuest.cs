@@ -417,7 +417,19 @@ public static class FantasyQuest
         };
 
         gameBuilder.AddQuest(mainQuest);
-        gameBuilder.AddWinConditionRoom("dragon_lair"); // Victory = defeat dragon
+
+        // Victory condition: Obtain the Crown of Amalion
+        // Players can achieve this by defeating, sneaking past, or negotiating with the dragon
+        gameBuilder.AddWinCondition(new WinCondition
+        {
+            Id = "obtain_crown",
+            Type = "item",
+            TargetId = "crown_of_amalion",
+            Description = "Obtain the Crown of Amalion",
+            VictoryMessage = "The Crown of Amalion is yours! Its magical light fills the cavern as you lift it high. " +
+                           "The kingdom will be saved, and your name will be remembered in legend. " +
+                           "Songs will be sung of your bravery for generations to come!"
+        });
 
         return gameBuilder
             .WithStartingRoom("town_square")

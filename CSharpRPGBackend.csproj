@@ -16,4 +16,9 @@
     <!-- <PackageReference Include="LLamaSharp" Version="0.14.0" /> -->
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Exclude RPGGameEditor files from being compiled with this project -->
+    <Compile Remove="RPGGameEditor/**/*.cs" />
+  </ItemGroup>
+
 </Project>

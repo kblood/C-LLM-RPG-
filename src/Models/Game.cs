@@ -33,7 +33,8 @@ public class Game
 
     // Game Progression
     public string StartingRoomId { get; set; } = "start";
-    public List<string>? WinConditionRoomIds { get; set; }  // Rooms that indicate victory
+    public List<string>? WinConditionRoomIds { get; set; }  // Rooms that indicate victory (legacy)
+    public List<WinCondition>? WinConditions { get; set; }  // New flexible win condition system
     public bool FreeRoam { get; set; } = true;             // Can player go anywhere?
 
     // Gameplay Features
@@ -47,6 +48,30 @@ public class Game
     public DateTime CreatedDate { get; set; } = DateTime.UtcNow;
     public string? Version { get; set; } = "1.0.0";
     public Dictionary<string, string> CustomSettings { get; set; } = new();
+}
+
+/// <summary>
+/// Represents a win condition that determines victory in the game.
+/// Can be based on entering a room, obtaining an item, defeating an NPC, or completing a quest.
+/// </summary>
+public class WinCondition
+{
+    public string Id { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+
+    // Type can be "room", "item", "npc_defeat", or "quest_complete"
+    public string Type { get; set; } = "room";
+
+    // The target depends on type:
+    // - "room": Room ID to enter
+    // - "item": Item ID to obtain
+    // - "npc_defeat": NPC ID to defeat
+    // - "quest_complete": Quest ID to complete
+    public string? TargetId { get; set; }
+
+    // Narrative for victory
+    public string? VictoryNarration { get; set; }
+    public string? VictoryMessage { get; set; }
 }
 
 public enum GameStyle

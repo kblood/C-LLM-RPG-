@@ -52,6 +52,9 @@ public class GameSettingsDefinition
     [JsonPropertyName("winConditionRoomIds")]
     public List<string> WinConditionRoomIds { get; set; } = new();
 
+    [JsonPropertyName("winConditions")]
+    public List<WinConditionDefinition> WinConditions { get; set; } = new();
+
     [JsonPropertyName("maxTurns")]
     public int? MaxTurns { get; set; }
 
@@ -66,6 +69,27 @@ public class GameSettingsDefinition
 
     [JsonPropertyName("ollamaUrl")]
     public string? OllamaUrl { get; set; } = "http://localhost:11434";
+}
+
+public class WinConditionDefinition
+{
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
+    [JsonPropertyName("description")]
+    public string Description { get; set; } = string.Empty;
+
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "room"; // "room", "item", "npc_defeat", "quest_complete"
+
+    [JsonPropertyName("targetId")]
+    public string? TargetId { get; set; } // Room ID, Item ID, NPC ID, or Quest ID
+
+    [JsonPropertyName("victoryNarration")]
+    public string? VictoryNarration { get; set; } // What the LLM should say when you win
+
+    [JsonPropertyName("victoryMessage")]
+    public string? VictoryMessage { get; set; } // Static message if no LLM narration
 }
 
 public class StyleSettingsDefinition

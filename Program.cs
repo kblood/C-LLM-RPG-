@@ -126,7 +126,7 @@ async Task RunReplayMode()
             }
 
             // Initialize Game Master
-            var gameMaster = new GameMaster(gameState, ollamaClient);
+            var gameMaster = new GameMaster(gameState, ollamaClient, null, game);
 
             // Create replay player
             var replay = new GameReplay(gameState, gameMaster, ollamaClient, game);
@@ -287,7 +287,7 @@ async Task RunInteractiveMode()
     }
 
     // Initialize the Game Master
-    var gameMaster = new GameMaster(gameState, ollamaClient);
+    var gameMaster = new GameMaster(gameState, ollamaClient, null, game);
 
     // Set up session logging
     var sessionLogPath = Path.Combine(Directory.GetCurrentDirectory(), $"SESSION_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.log");

@@ -391,7 +391,19 @@ public static class SciFiAdventure
         };
 
         gameBuilder.AddQuest(escapeQuest);
-        gameBuilder.AddWinConditionRoom("escape_pod_bay");
+
+        // Victory condition: Reach the escape pod bay and escape
+        gameBuilder.AddWinCondition(new WinCondition
+        {
+            Id = "reach_escape_pods",
+            Type = "room",
+            TargetId = "escape_pod_bay",
+            Description = "Reach the escape pod bay",
+            VictoryMessage = "You burst into the escape pod bay! With trembling hands, you override the security locks " +
+                           "and dive into the nearest pod. As the hatch seals shut, you slam the launch button. " +
+                           "The pod shoots into space just as the alien hive ship appears on the horizon. " +
+                           "You've survived Station Zeta. Against all odds, you're going home."
+        });
 
         return gameBuilder
             .WithStartingRoom("crew_quarters")

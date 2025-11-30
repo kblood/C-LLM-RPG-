@@ -228,7 +228,7 @@ public class GameLoader
             ? r
             : ItemRarity.Common;
 
-        return new Item
+        var item = new Item
         {
             Id = def.Id,
             Name = def.Name,
@@ -247,6 +247,34 @@ public class GameLoader
             Stackable = itemType == ItemType.Consumable,
             CustomProperties = def.Metadata
         };
+
+        // Set consumable properties
+        if (itemType == ItemType.Consumable)
+        {
+            item.IsConsumable = true;
+            item.ConsumableUsesRemaining = def.Metadata.ContainsKey("uses")
+                ? Convert.ToInt32(def.Metadata["uses"])
+                : 1;
+
+            // Parse consumable effects from metadata
+            if (def.Metadata.ContainsKey("heal"))
+            {
+                item.ConsumableEffects["heal"] = Convert.ToInt32(def.Metadata["heal"]);
+            }
+            if (def.Metadata.ContainsKey("mana"))
+            {
+                item.ConsumableEffects["mana"] = Convert.ToInt32(def.Metadata["mana"]);
+            }
+        }
+
+        // Handle teleportation items
+        if (itemType == ItemType.Key && def.Metadata.ContainsKey("teleportTo"))
+        {
+            item.IsTeleportation = true;
+            item.TeleportDestinationRoomId = def.Metadata["teleportTo"].ToString();
+        }
+
+        return item;
     }
 
     private Character ConvertNpcDefinitionToCharacter(NpcDefinition def, Dictionary<string, Item> allItems)

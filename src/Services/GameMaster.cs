@@ -17,17 +17,29 @@ public class GameMaster
     private readonly Dictionary<string, NpcBrain> _npcBrains;
     private readonly string _gmSystemPrompt;
     private readonly CombatService _combatService;
+    private readonly Game? _game;  // Optional reference to the game definition for win conditions
+    public bool DebugMode { get; set; } = false;  // Toggle for debug output
 
-    public GameMaster(GameState gameState, OllamaClient ollamaClient, string? gmSystemPrompt = null)
+    public GameMaster(GameState gameState, OllamaClient ollamaClient, string? gmSystemPrompt = null, Game? game = null)
     {
         _gameState = gameState;
         _ollamaClient = ollamaClient;
         _npcBrains = new();
         _gmSystemPrompt = gmSystemPrompt ?? GenerateDefaultGMPrompt();
         _combatService = new CombatService();
+        _game = game;
 
         // Initialize NPC brains with custom personalities
         InitializeNpcBrains();
+    }
+
+    /// <summary>
+    /// Log debug information only if DebugMode is enabled.
+    /// </summary>
+    private void DebugLog(string message)
+    {
+        if (DebugMode)
+            Console.WriteLine(message);
     }
 
     /// <summary>
@@ -62,6 +74,14 @@ public class GameMaster
 
         // Step 3: Ask LLM to narrate based on original command + execution results
         var narration = await NarrateWithResultsAsync(playerCommand, commandsToExecute, executionResults);
+
+        // Step 4: Check for win condition after executing actions
+        var victoryCheck = CheckWinCondition();
+        if (victoryCheck.HasValue && victoryCheck.Value.isVictory)
+        {
+            var victoryNarration = victoryCheck.Value.message;
+            return BuildGameResponse($"🏆 **VICTORY!** 🏆\n\n{victoryNarration}");
+        }
 
         // Build the complete response with game state
         var response = BuildGameResponse(narration);
@@ -181,8 +201,32 @@ Adjacent locations: {string.Join(", ", currentRoom.GetAvailableExits().Select(e 
         var npcList = string.Join(", ", currentRoom.NPCIds
             .Where(id => _gameState.NPCs.ContainsKey(id))
             .Select(id => $"{_gameState.NPCs[id].Name} ({(_gameState.NPCs[id].IsAlive ? "alive" : "dead")})"));
-        var itemList = string.Join(", ", _gameState.PlayerInventory.Items
-            .Select(kvp => $"{kvp.Value.Item.Name}"));
+
+        // Enhanced inventory display with item types
+        var playerItemList = string.Join(", ", _gameState.PlayerInventory.Items
+            .Select(kvp => {
+                var item = kvp.Value.Item;
+                var suffix = "";
+                if (item.IsConsumable) suffix = " (consumable)";
+                else if (item.IsEquippable) suffix = " (equipment)";
+                return $"{item.Name}{suffix}";
+            }));
+
+        // NPC inventory context - show what NPCs are carrying
+        var npcInventoryList = "";
+        var npcsInRoom = currentRoom.NPCIds
+            .Where(id => _gameState.NPCs.ContainsKey(id))
+            .Select(id => _gameState.NPCs[id])
+            .ToList();
+
+        if (npcsInRoom.Any(npc => npc.CarriedItems.Count > 0))
+        {
+            var npcItems = npcsInRoom
+                .Where(npc => npc.CarriedItems.Count > 0)
+                .Select(npc => $"{npc.Name} has: {string.Join(", ", npc.CarriedItems.Values.Select(ii => ii.Item.Name))}")
+                .ToList();
+            npcInventoryList = "\nNPC inventory: " + string.Join("; ", npcItems);
+        }
 
         var exitsList = availableExits.Count > 0
             ? string.Join(", ", availableExits.Select(e => e.DisplayName))
@@ -190,8 +234,8 @@ Adjacent locations: {string.Join(", ", currentRoom.GetAvailableExits().Select(e 
 
         var context = $@"Current Location: {currentRoom.Name}
 Available exits: {exitsList}
-NPCs here: {(string.IsNullOrEmpty(npcList) ? "None" : npcList)}
-Your inventory: {(string.IsNullOrEmpty(itemList) ? "Empty" : itemList)}
+NPCs here: {(string.IsNullOrEmpty(npcList) ? "None" : npcList)}{npcInventoryList}
+Your inventory: {(string.IsNullOrEmpty(playerItemList) ? "Empty" : playerItemList)}
 Player health: {_gameState.Player.Health}/{_gameState.Player.MaxHealth}
 In combat: {_gameState.InCombatMode}";
 
@@ -217,15 +261,26 @@ Valid actions: move, look, inventory, talk, follow, examine, take, drop, use, at
 
 Rules:
 1. Return ONLY the JSON array - no explanation, no code blocks, no markdown
-2. The 'target' field is CRITICAL - it must contain the exact thing the player wants to interact with
-3. Match the player's intent EXACTLY - DO NOT add extra actions the player didn't ask for
-4. Each action must directly correspond to something the player explicitly stated
-5. Only return multiple commands if the player explicitly asked for multiple actions
-6. If the command is unclear, return an empty array: []
+2. The 'target' field is CRITICAL - it must contain the exact thing the player wants to interact with (use full NPC names from context)
+3. The 'details' field should contain the full item/target name - resolve abbreviations to full names from available inventory
+4. Match the player's intent EXACTLY - DO NOT add extra actions the player didn't ask for
+5. Each action must directly correspond to something the player explicitly stated
+6. Only return multiple commands if the player explicitly asked for multiple actions
+7. If the command is unclear, return an empty array: []
+
+ITEM RESOLUTION:
+- If player says 'use stim' and you see 'Combat Stimulant (consumable)' in context, use the FULL name 'Combat Stimulant'
+- If player says 'give stims to chen' and Chen has 'Combat Stimulant', put 'Combat Stimulant' in details
+- Always resolve abbreviations and short names to exact item names from the provided context
+- If you cannot resolve the item name from context, still make your best guess based on player intent
 
 Examples of CORRECT responses:
 Player says 'attack chen' -> [{""action"":""attack"",""target"":""Dr. Sarah Chen"",""details"":""""}]
-Player says 'ask chen for stims' -> [{""action"":""give"",""target"":""Dr. Sarah Chen"",""details"":""stims""}]
+Player says 'flee' -> [{""action"":""flee"",""target"":"""",""details"":""""}]
+Player says 'check chen health' -> [{""action"":""examine"",""target"":""Dr. Sarah Chen"",""details"":""""}]
+Player says 'ask chen for stims' AND context shows 'Dr. Sarah Chen has: Combat Stimulant' -> [{""action"":""give"",""target"":""Dr. Sarah Chen"",""details"":""Combat Stimulant""}]
+Player says 'use stim' AND context shows 'Your inventory: Combat Stimulant (consumable)' -> [{""action"":""use"",""target"":"""",""details"":""Combat Stimulant""}]
+Player says 'use stim on chen' AND context shows both items -> [{""action"":""use"",""target"":""Dr. Sarah Chen"",""details"":""Combat Stimulant""}]
 Player says 'ask chen to follow' -> [{""action"":""follow"",""target"":""Dr. Sarah Chen"",""details"":""""}]
 Player says 'search her body' -> [{""action"":""examine"",""target"":""Dr. Sarah Chen"",""details"":""""}]
 Player says 'take the loot' -> [{""action"":""take"",""target"":""loot"",""details"":""""}]
@@ -242,31 +297,31 @@ Player says 'look around' -> [{""action"":""look"",""target"":"""",""details"":"
             var response = await _ollamaClient.ChatAsync(messages);
 
             // DEBUG: Log the raw LLM response
-            Console.WriteLine("[DEBUG] LLM Response:");
+            DebugLog("[DEBUG] LLM Response:");
             Console.WriteLine(response);
-            Console.WriteLine("[DEBUG] ---");
+            DebugLog("[DEBUG] ---");
 
             var actionPlans = ParseActionJsonArray(response);
 
-            Console.WriteLine($"[DEBUG] Parsed {actionPlans.Count} actions from LLM response");
+            DebugLog($"[DEBUG] Parsed {actionPlans.Count} actions from LLM response");
             foreach (var plan in actionPlans)
             {
-                Console.WriteLine($"[DEBUG]   Action: {plan.Action}, Target: {plan.Target}");
+                DebugLog($"[DEBUG]   Action: {plan.Action}, Target: {plan.Target}, Details: {plan.Details}");
             }
 
             // Always fallback to fallback parser if LLM returns empty or fails
             if (actionPlans.Count == 0)
             {
-                Console.WriteLine("[DEBUG] LLM returned no actions, trying fallback parser");
+                DebugLog("[DEBUG] LLM returned no actions, trying fallback parser");
                 var fallbackPlan = TryParseFallback(playerCommand, currentRoom);
                 if (fallbackPlan != null)
                 {
-                    Console.WriteLine($"[DEBUG] Fallback parser returned: {fallbackPlan.Action} -> {fallbackPlan.Target}");
+                    DebugLog($"[DEBUG] Fallback parser returned: {fallbackPlan.Action} -> {fallbackPlan.Target}");
                     actionPlans.Add(fallbackPlan);
                 }
                 else
                 {
-                    Console.WriteLine("[DEBUG] Fallback parser returned null");
+                    DebugLog("[DEBUG] Fallback parser returned null");
                 }
             }
 
@@ -274,7 +329,7 @@ Player says 'look around' -> [{""action"":""look"",""target"":"""",""details"":"
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[DEBUG] Exception in DecideActionsAsync: {ex.Message}");
+            DebugLog($"[DEBUG] Exception in DecideActionsAsync: {ex.Message}");
             // Fallback on error
             var fallbackPlan = TryParseFallback(playerCommand, currentRoom);
             return fallbackPlan != null ? new List<ActionPlan> { fallbackPlan } : new List<ActionPlan>();
@@ -293,31 +348,31 @@ Player says 'look around' -> [{""action"":""look"",""target"":"""",""details"":"
             var startIdx = jsonResponse.IndexOf('[');
             var endIdx = jsonResponse.LastIndexOf(']');
 
-            Console.WriteLine($"[DEBUG] ParseActionJsonArray: startIdx={startIdx}, endIdx={endIdx}");
+            DebugLog($"[DEBUG] ParseActionJsonArray: startIdx={startIdx}, endIdx={endIdx}");
 
             if (startIdx >= 0 && endIdx > startIdx)
             {
                 var jsonStr = jsonResponse.Substring(startIdx, endIdx - startIdx + 1);
-                Console.WriteLine($"[DEBUG] Extracted JSON: {jsonStr}");
+                DebugLog($"[DEBUG] Extracted JSON: {jsonStr}");
                 var actions = System.Text.Json.JsonSerializer.Deserialize<List<ActionPlan>>(jsonStr);
                 if (actions != null)
                 {
-                    Console.WriteLine($"[DEBUG] Successfully deserialized {actions.Count} actions");
+                    DebugLog($"[DEBUG] Successfully deserialized {actions.Count} actions");
                     result.AddRange(actions);
                 }
                 else
                 {
-                    Console.WriteLine("[DEBUG] Deserialization returned null");
+                    DebugLog("[DEBUG] Deserialization returned null");
                 }
             }
             else
             {
-                Console.WriteLine("[DEBUG] Could not find JSON array brackets in response");
+                DebugLog("[DEBUG] Could not find JSON array brackets in response");
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[DEBUG] Exception parsing JSON: {ex.Message}");
+            DebugLog($"[DEBUG] Exception parsing JSON: {ex.Message}");
         }
 
         return result;
@@ -369,19 +424,26 @@ Player says 'look around' -> [{""action"":""look"",""target"":"""",""details"":"
                     }
                 }
             }
+            // Attack and combat actions should show the actual result, not be narrated
+            else if (actionLower == "attack" || actionLower == "flee")
+            {
+                // Combat actions show results directly without narration
+                // The action result already contains combat status from HandleAttack/HandleFlee
+                dialogueLines.Add(result.Message);
+            }
             else
             {
-                // All other actions (examine, attack, move, use, etc) get narrated
+                // All other actions (examine, move, use, etc) get narrated
                 narratedActions.Add((action, result));
             }
         }
 
-        Console.WriteLine("[DEBUG] NarrateWithResultsAsync:");
-        Console.WriteLine($"[DEBUG]   Original command: {playerCommand}");
-        Console.WriteLine($"[DEBUG]   Current location: {currentRoom.Name}");
-        Console.WriteLine($"[DEBUG]   Player health: {_gameState.Player.Health}/{_gameState.Player.MaxHealth}");
-        Console.WriteLine($"[DEBUG]   Dialogue lines: {dialogueLines.Count}");
-        Console.WriteLine($"[DEBUG]   Narrated actions: {narratedActions.Count}");
+        DebugLog("[DEBUG] NarrateWithResultsAsync:");
+        DebugLog($"[DEBUG]   Original command: {playerCommand}");
+        DebugLog($"[DEBUG]   Current location: {currentRoom.Name}");
+        DebugLog($"[DEBUG]   Player health: {_gameState.Player.Health}/{_gameState.Player.MaxHealth}");
+        DebugLog($"[DEBUG]   Dialogue lines: {dialogueLines.Count}");
+        DebugLog($"[DEBUG]   Narrated actions: {narratedActions.Count}");
 
         // Build combined output: dialogue first, then narrated actions
         var output = new StringBuilder();
@@ -424,7 +486,16 @@ Now create vivid, engaging narrative (2-3 sentences) that describes what happene
                 new()
                 {
                     Role = "system",
-                    Content = @"You are a fantasy RPG narrator. Based on the player's original intent and the actual game results, create an engaging narrative description of what happened. Be creative but accurate to the actual results. If an action failed, describe why. If multiple actions were performed, weave them together into a cohesive narrative."
+                    Content = @"You are a fantasy RPG narrator. Based on the player's original intent and the actual game results, create an engaging narrative description (2-3 sentences) of what happened.
+
+CRITICAL RULES:
+1. ONLY mention NPCs and locations that are already in the current location context
+2. NEVER invent new NPCs, creatures, or characters that weren't mentioned
+3. NEVER invent new rooms or locations beyond the current room
+4. If an action failed, describe why based on the actual results message
+5. If an action succeeded, describe what actually happened based on the results
+6. Be creative with descriptions but strictly accurate to the game state
+7. Do NOT add details about NPCs doing things not mentioned in the action results"
                 },
                 new() { Role = "user", Content = context }
             };
@@ -598,13 +669,13 @@ RULES:
         try
         {
             var response = await _ollamaClient.ChatAsync(messages);
-            Console.WriteLine($"[DEBUG] NPC Give Decision Response:\n{response}\n[DEBUG] ---");
+            DebugLog($"[DEBUG] NPC Give Decision Response:\n{response}\n[DEBUG] ---");
 
             return ParseGiveDecisionJson(response);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[DEBUG] Error getting NPC give decision: {ex.Message}");
+            DebugLog($"[DEBUG] Error getting NPC give decision: {ex.Message}");
             return new NpcGiveDecision { WillGive = false, Reason = "I'm confused", Narrative = "Sorry, I'm not sure what you want." };
         }
     }
@@ -629,7 +700,7 @@ RULES:
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[DEBUG] Error parsing give decision JSON: {ex.Message}");
+            DebugLog($"[DEBUG] Error parsing give decision JSON: {ex.Message}");
         }
 
         return new NpcGiveDecision { WillGive = false, Reason = "Unable to understand" };
@@ -641,7 +712,7 @@ RULES:
     private ActionPlan? TryParseFallback(string playerCommand, Room currentRoom)
     {
         var lower = playerCommand.ToLower().Trim();
-        Console.WriteLine($"[DEBUG] TryParseFallback: '{playerCommand}' -> '{lower}'");
+        DebugLog($"[DEBUG] TryParseFallback: '{playerCommand}' -> '{lower}'");
 
         // Check for direction keywords
         var directions = new[] { "north", "south", "east", "west", "up", "down", "left", "right", "forward" };
@@ -948,7 +1019,7 @@ MATCHING STRATEGY:
             "attack" => HandleAttack(plan.Target),
             "take" => HandleTake(plan.Target),
             "drop" => HandleDrop(plan.Target),
-            "use" => HandleUse(plan.Target),
+            "use" => HandleUse(plan.Target, plan.Details),
             "give" => await HandleGiveAsync(plan.Target, string.IsNullOrEmpty(plan.Details) ? playerCommand : plan.Details),
             "help" => HandleHelp(),
             "status" => HandleStatus(),
@@ -1018,14 +1089,14 @@ Action Result: {result.Message}";
         var currentRoom = _gameState.GetCurrentRoom();
         var availableExits = currentRoom.GetAvailableExits();
 
-        Console.WriteLine($"[DEBUG] HandleMove: exitName='{exitName}', current room='{currentRoom.Name}'");
-        Console.WriteLine($"[DEBUG] Available exits: {string.Join(", ", availableExits.Select(e => e.DisplayName))}");
+        DebugLog($"[DEBUG] HandleMove: exitName='{exitName}', current room='{currentRoom.Name}'");
+        DebugLog($"[DEBUG] Available exits: {string.Join(", ", availableExits.Select(e => e.DisplayName))}");
 
         // Try to find the exit
         var exit = currentRoom.FindExit(exitName);
         if (exit == null)
         {
-            Console.WriteLine($"[DEBUG] HandleMove: exit '{exitName}' not found");
+            DebugLog($"[DEBUG] HandleMove: exit '{exitName}' not found");
             return new ActionResult
             {
                 Success = false,
@@ -1033,18 +1104,18 @@ Action Result: {result.Message}";
             };
         }
 
-        Console.WriteLine($"[DEBUG] HandleMove: found exit, destination room='{exit.DestinationRoomId}'");
+        DebugLog($"[DEBUG] HandleMove: found exit, destination room='{exit.DestinationRoomId}'");
 
         if (_gameState.MoveToRoomByExit(exitName))
         {
             var newRoom = _gameState.GetCurrentRoom();
-            Console.WriteLine($"[DEBUG] HandleMove: successfully moved to '{newRoom.Name}'");
-            Console.WriteLine($"[DEBUG] HandleMove: Player is now in room {_gameState.CurrentRoomId}");
+            DebugLog($"[DEBUG] HandleMove: successfully moved to '{newRoom.Name}'");
+            DebugLog($"[DEBUG] HandleMove: Player is now in room {_gameState.CurrentRoomId}");
 
             // Move all companions with the player
-            Console.WriteLine($"[DEBUG] HandleMove: Before moving companions, there are {_gameState.Companions.Count} companions");
+            DebugLog($"[DEBUG] HandleMove: Before moving companions, there are {_gameState.Companions.Count} companions");
             _gameState.MoveCompanionsToCurrentRoom();
-            Console.WriteLine($"[DEBUG] HandleMove: After moving companions");
+            DebugLog($"[DEBUG] HandleMove: After moving companions");
 
             return new ActionResult
             {
@@ -1053,7 +1124,7 @@ Action Result: {result.Message}";
             };
         }
 
-        Console.WriteLine($"[DEBUG] HandleMove: MoveToRoomByExit returned false");
+        DebugLog($"[DEBUG] HandleMove: MoveToRoomByExit returned false");
         return new ActionResult { Success = false, Message = "Cannot move there." };
     }
 
@@ -1192,7 +1263,7 @@ Action Result: {result.Message}";
                 newRoom.NPCIds.Add(npc.Id);
             }
 
-            Console.WriteLine($"[DEBUG] {npc.Name} joined the party and moved to {newRoom.Name}");
+            DebugLog($"[DEBUG] {npc.Name} joined the party and moved to {newRoom.Name}");
             return new ActionResult { Success = true, Message = $"{npc.Name} says: \"{decision.Response}\"\n\n{npc.Name} joins your party and will follow you." };
         }
         else
@@ -1230,13 +1301,13 @@ RULES:
         try
         {
             var response = await _ollamaClient.ChatAsync(messages);
-            Console.WriteLine($"[DEBUG] NPC Follow Decision Response:\n{response}\n[DEBUG] ---");
+            DebugLog($"[DEBUG] NPC Follow Decision Response:\n{response}\n[DEBUG] ---");
 
             return ParseFollowDecisionJson(response);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[DEBUG] Error getting NPC follow decision: {ex.Message}");
+            DebugLog($"[DEBUG] Error getting NPC follow decision: {ex.Message}");
             return new FollowDecision { WillFollow = false, Response = "I'm not sure about that." };
         }
     }
@@ -1261,7 +1332,7 @@ RULES:
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[DEBUG] Error parsing follow decision JSON: {ex.Message}");
+            DebugLog($"[DEBUG] Error parsing follow decision JSON: {ex.Message}");
         }
 
         return new FollowDecision { WillFollow = false, Response = "I'm uncertain about this." };
@@ -1559,8 +1630,16 @@ RULES:
             var npcObj = _gameState.NPCs[npc];
             var npcDesc = $"{npcObj.Name}: {npcObj.Description ?? "An NPC"}";
 
+            // Show health for alive NPCs
+            if (npcObj.IsAlive)
+            {
+                var healthPercent = (npcObj.Health * 100) / npcObj.MaxHealth;
+                var healthBar = BuildHealthBar(healthPercent, 20);
+                npcDesc += $"\n\nHealth: {healthBar} {npcObj.Health}/{npcObj.MaxHealth} HP";
+                npcDesc += $"\nLevel: {npcObj.Level} | Strength: {npcObj.Strength} | Agility: {npcObj.Agility} | Armor: {npcObj.Armor}";
+            }
             // Show additional info if the NPC is dead
-            if (!npcObj.IsAlive)
+            else
             {
                 npcDesc += $"\n\n☠️ {npcObj.Name} is dead. Their body lies here lifeless. (HP: {npcObj.Health}/{npcObj.MaxHealth})";
 
@@ -1675,21 +1754,63 @@ RULES:
         return new ActionResult { Success = true, Message = $"You dropped {item.Item.Name}." };
     }
 
-    private ActionResult HandleUse(string itemName)
+    private ActionResult HandleUse(string itemNameOrTarget, string itemNameFromDetails = "")
     {
+        var room = _gameState.GetCurrentRoom();
+
+        // Determine item name - prefer details (from LLM), fallback to target
+        var itemName = !string.IsNullOrWhiteSpace(itemNameFromDetails) ? itemNameFromDetails : itemNameOrTarget;
+        DebugLog($"[DEBUG] HandleUse called: itemNameOrTarget='{itemNameOrTarget}', itemNameFromDetails='{itemNameFromDetails}', resolved itemName='{itemName}'");
         if (string.IsNullOrWhiteSpace(itemName))
             return new ActionResult { Success = false, Message = "Use what?" };
 
+        // Determine if we're using on a character (target might be NPC name)
+        Character? targetCharacter = null;
+        if (!string.IsNullOrWhiteSpace(itemNameOrTarget) && string.IsNullOrWhiteSpace(itemNameFromDetails))
+        {
+            // No details, so target might be both item and character name - check for NPC first
+            var npcTarget = room.NPCIds.FirstOrDefault(id =>
+                _gameState.NPCs.ContainsKey(id) &&
+                _gameState.NPCs[id].Name.ToLower().Contains(itemNameOrTarget.ToLower()));
+
+            if (npcTarget != null)
+                targetCharacter = _gameState.NPCs[npcTarget];
+        }
+        else if (!string.IsNullOrWhiteSpace(itemNameOrTarget) && !string.IsNullOrWhiteSpace(itemNameFromDetails))
+        {
+            // Has details, so target is the character
+            var npcTarget = room.NPCIds.FirstOrDefault(id =>
+                _gameState.NPCs.ContainsKey(id) &&
+                _gameState.NPCs[id].Name.ToLower().Contains(itemNameOrTarget.ToLower()));
+
+            if (npcTarget != null)
+                targetCharacter = _gameState.NPCs[npcTarget];
+        }
+
+        // If no target character, use on player
+        if (targetCharacter == null)
+            targetCharacter = _gameState.Player;
+
+        // Find the item in inventory
         var itemLower = itemName.ToLower();
+        DebugLog($"[DEBUG] Looking for item: '{itemLower}' in inventory ({_gameState.PlayerInventory.Items.Count} items)");
+        foreach (var ii in _gameState.PlayerInventory.Items.Values)
+        {
+            DebugLog($"[DEBUG]   Inventory contains: '{ii.Item.Name}' (contains check: {ii.Item.Name.ToLower().Contains(itemLower)})");
+        }
         var inventoryItem = _gameState.PlayerInventory.Items.Values
             .FirstOrDefault(ii => ii.Item.Name.ToLower().Contains(itemLower));
 
         if (inventoryItem == null)
+        {
+            DebugLog($"[DEBUG] Item '{itemName}' not found in inventory");
             return new ActionResult { Success = false, Message = $"You don't have '{itemName}'." };
+        }
+        DebugLog($"[DEBUG] Found item: '{inventoryItem.Item.Name}'");
 
         var item = inventoryItem.Item;
 
-        // Handle teleportation items
+        // Handle teleportation items (always on player)
         if (item.IsTeleportation && !string.IsNullOrEmpty(item.TeleportDestinationRoomId))
         {
             if (_gameState.Rooms.ContainsKey(item.TeleportDestinationRoomId))
@@ -1703,20 +1824,41 @@ RULES:
             }
         }
 
-        // Handle consumables
+        // Handle consumables (can be used on self or other character)
         if (item.IsConsumable && item.ConsumableUsesRemaining > 0)
         {
+            var message = new StringBuilder();
             var healAmount = item.ConsumableEffects?.ContainsKey("heal") == true ? item.ConsumableEffects["heal"] : 0;
+
             if (healAmount > 0)
             {
-                _gameState.Player.Heal(healAmount);
+                targetCharacter.Heal(healAmount);
+
+                if (targetCharacter.IsPlayer)
+                {
+                    message.AppendLine($"You use {item.Name} and restore {healAmount} health.");
+                }
+                else
+                {
+                    message.AppendLine($"You give {item.Name} to {targetCharacter.Name}.");
+                    message.AppendLine($"{targetCharacter.Name} uses it and recovers {healAmount} health.");
+                }
             }
+            else
+            {
+                if (targetCharacter.IsPlayer)
+                    message.AppendLine($"You use {item.Name}.");
+                else
+                    message.AppendLine($"You use {item.Name} on {targetCharacter.Name}.");
+            }
+
             item.ConsumableUsesRemaining--;
             if (item.ConsumableUsesRemaining == 0)
             {
                 _gameState.PlayerInventory.RemoveItem(item.Id);
             }
-            return new ActionResult { Success = true, Message = $"You use {item.Name}." };
+
+            return new ActionResult { Success = true, Message = message.ToString().TrimEnd() };
         }
 
         return new ActionResult { Success = false, Message = $"You can't use {item.Name} like that." };
@@ -1897,15 +2039,70 @@ Return ONLY the converted message - no other text, no markdown, just the message
             if (string.IsNullOrWhiteSpace(convertedMessage))
                 return $"The player says: \"{playerCommand}\"";
 
-            Console.WriteLine($"[DEBUG] Converted command '{playerCommand}' to message: '{convertedMessage}'");
+            DebugLog($"[DEBUG] Converted command '{playerCommand}' to message: '{convertedMessage}'");
             return convertedMessage;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[DEBUG] Error converting player command to NPC message: {ex.Message}");
+            DebugLog($"[DEBUG] Error converting player command to NPC message: {ex.Message}");
             // Fallback: simple formatting
             return $"The player says: \"{playerCommand}\"";
         }
+    }
+
+    /// <summary>
+    /// Check if any win condition is satisfied and return victory info if so.
+    /// Returns null if no win condition is met.
+    /// </summary>
+    public (bool isVictory, string message)? CheckWinCondition()
+    {
+        // If no game reference, cannot check win conditions
+        if (_game == null)
+            return null;
+
+        // If no win conditions defined, use legacy room-based system
+        if (_game.WinConditions == null || _game.WinConditions.Count == 0)
+        {
+            // Legacy: check if player is in a win condition room
+            if (_game.WinConditionRoomIds != null &&
+                _game.WinConditionRoomIds.Contains(_gameState.CurrentRoomId))
+            {
+                return (true, "You have achieved victory!");
+            }
+            return null;
+        }
+
+        // Check each win condition
+        foreach (var condition in _game.WinConditions)
+        {
+            bool conditionMet = condition.Type switch
+            {
+                "room" => _gameState.CurrentRoomId == condition.TargetId,
+
+                "item" => !string.IsNullOrEmpty(condition.TargetId) &&
+                         _gameState.PlayerInventory.Items.Values.Any(ii => ii.Item.Id == condition.TargetId),
+
+                "npc_defeat" => !string.IsNullOrEmpty(condition.TargetId) &&
+                               _gameState.NPCs.ContainsKey(condition.TargetId) &&
+                               !_gameState.NPCs[condition.TargetId].IsAlive,
+
+                "quest_complete" => !string.IsNullOrEmpty(condition.TargetId) &&
+                                   _gameState.ActiveQuests.Any(q => q.Id == condition.TargetId && q.IsComplete),
+
+                _ => false
+            };
+
+            if (conditionMet)
+            {
+                var message = !string.IsNullOrEmpty(condition.VictoryMessage)
+                    ? condition.VictoryMessage
+                    : condition.VictoryNarration ?? "You have achieved victory!";
+
+                return (true, message);
+            }
+        }
+
+        return null;
     }
 }
 
