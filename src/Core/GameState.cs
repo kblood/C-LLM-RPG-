@@ -14,6 +14,9 @@ public class GameState
     public List<Quest> ActiveQuests { get; set; } = new();
     public List<string> RecentPlayerCommands { get; set; } = new(); // Track last N player commands for LLM context
 
+    // Party and Companions
+    public List<string> Companions { get; set; } = new(); // NPC IDs of companions following the player
+
     // Combat Mode
     public bool InCombatMode { get; set; } = false;
     public string? CurrentCombatNpcId { get; set; } = null;
@@ -244,5 +247,62 @@ public class GameState
             return "";
 
         return "Recent actions: " + string.Join(", ", RecentPlayerCommands);
+    }
+
+    /// <summary>
+    /// Add a companion to follow the player.
+    /// </summary>
+    public void AddCompanion(string npcId)
+    {
+        if (!Companions.Contains(npcId) && NPCs.ContainsKey(npcId))
+        {
+            Companions.Add(npcId);
+            if (NPCs[npcId].CanJoinParty)
+                NPCs[npcId].Role = NPCRole.Companion;
+        }
+    }
+
+    /// <summary>
+    /// Remove a companion from the party.
+    /// </summary>
+    public void RemoveCompanion(string npcId)
+    {
+        if (Companions.Contains(npcId))
+        {
+            Companions.Remove(npcId);
+            if (NPCs.ContainsKey(npcId) && NPCs[npcId].Role == NPCRole.Companion)
+                NPCs[npcId].Role = NPCRole.Ally;
+        }
+    }
+
+    /// <summary>
+    /// Move all companions to the player's current room.
+    /// </summary>
+    public void MoveCompanionsToCurrentRoom()
+    {
+        var currentRoom = CurrentRoomId;
+        foreach (var companionId in Companions)
+        {
+            if (NPCs.ContainsKey(companionId))
+            {
+                NPCs[companionId].CurrentRoomId = currentRoom;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Get a formatted list of companion names.
+    /// </summary>
+    public string GetCompanionsList()
+    {
+        if (Companions.Count == 0)
+            return "none";
+
+        var companionNames = Companions
+            .Where(id => NPCs.ContainsKey(id))
+            .Select(id => NPCs[id].Name)
+            .ToList();
+
+        return companionNames.Count > 0 ? string.Join(", ", companionNames) : "none";
     }
 }

@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using CSharpRPGBackend.Core;
 using CSharpRPGBackend.LLM;
 
@@ -212,7 +213,7 @@ IMPORTANT: 'target' MUST contain the specific thing the player referred to:
 - For 'look' -> ""target"":""""
 - For 'inventory' -> ""target"":""""
 
-Valid actions: move, look, inventory, talk, examine, take, drop, use, attack, give, stop, status, help
+Valid actions: move, look, inventory, talk, follow, examine, take, drop, use, attack, give, stop, status, help
 
 Rules:
 1. Return ONLY the JSON array - no explanation, no code blocks, no markdown
@@ -225,6 +226,7 @@ Rules:
 Examples of CORRECT responses:
 Player says 'attack chen' -> [{""action"":""attack"",""target"":""Dr. Sarah Chen"",""details"":""""}]
 Player says 'ask chen for stims' -> [{""action"":""give"",""target"":""Dr. Sarah Chen"",""details"":""stims""}]
+Player says 'ask chen to follow' -> [{""action"":""follow"",""target"":""Dr. Sarah Chen"",""details"":""""}]
 Player says 'search her body' -> [{""action"":""examine"",""target"":""Dr. Sarah Chen"",""details"":""""}]
 Player says 'take the loot' -> [{""action"":""take"",""target"":""loot"",""details"":""""}]
 Player says 'go out' -> [{""action"":""move"",""target"":""Out Into Corridor"",""details"":""""}]
@@ -916,6 +918,7 @@ MATCHING STRATEGY:
             "look" => HandleLook(),
             "inventory" => HandleInventory(),
             "talk" => await HandleTalkAsync(plan.Target, string.IsNullOrEmpty(plan.Details) ? playerCommand : plan.Details),
+            "follow" => await HandleFollowAsync(plan.Target),
             "examine" => HandleExamine(plan.Target, playerCommand),
             "attack" => HandleAttack(plan.Target),
             "take" => HandleTake(plan.Target),
@@ -1011,6 +1014,10 @@ Action Result: {result.Message}";
         {
             var newRoom = _gameState.GetCurrentRoom();
             Console.WriteLine($"[DEBUG] HandleMove: successfully moved to '{newRoom.Name}'");
+
+            // Move all companions with the player
+            _gameState.MoveCompanionsToCurrentRoom();
+
             return new ActionResult
             {
                 Success = true,
@@ -1087,16 +1094,89 @@ Action Result: {result.Message}";
         string npcResponse = "";
         if (_npcBrains.ContainsKey(npc.Id))
         {
-            // Use player's specific question if provided, otherwise generic greeting
-            var questionToAsk = string.IsNullOrWhiteSpace(playerQuestion)
-                ? $"Hello, {npc.Name}. What can you tell me?"
-                : playerQuestion;
-            npcResponse = await _npcBrains[npc.Id].RespondToPlayerAsync(questionToAsk);
+            // STEP 1: Use LLM to convert player's raw command into a natural message for the NPC
+            string messageToNpc;
+            if (string.IsNullOrWhiteSpace(playerQuestion))
+            {
+                messageToNpc = "The player greets you.";
+            }
+            else
+            {
+                messageToNpc = await ConvertPlayerCommandToNpcMessageAsync(playerQuestion, npc.Name);
+            }
+
+            // STEP 2: Send the converted message to the NPC for their response
+            npcResponse = await _npcBrains[npc.Id].RespondToPlayerAsync(messageToNpc);
         }
 
         // Return the NPC's actual response as the message
         var message = $"{npc.Name} says: \"{npcResponse}\"";
         return new ActionResult { Success = true, Message = message };
+    }
+
+    private async Task<ActionResult> HandleFollowAsync(string npcName)
+    {
+        var room = _gameState.GetCurrentRoom();
+        var npcNameLower = npcName.ToLower();
+
+        // Find the NPC
+        var npc = _gameState.GetNPCInRoom(npcName);
+        if (npc == null)
+        {
+            var npcId = room.NPCIds.FirstOrDefault(id =>
+                _gameState.NPCs.ContainsKey(id) &&
+                _gameState.NPCs[id].Name.ToLower().Contains(npcNameLower));
+
+            if (npcId != null)
+                npc = _gameState.NPCs[npcId];
+        }
+
+        if (npc == null)
+            return new ActionResult { Success = false, Message = $"You don't see '{npcName}' here to ask to follow." };
+
+        // Check if NPC can join the party
+        if (!npc.CanJoinParty)
+            return new ActionResult { Success = false, Message = $"{npc.Name} doesn't want to follow you." };
+
+        // Check if NPC is already a companion
+        if (_gameState.Companions.Contains(npc.Id))
+            return new ActionResult { Success = true, Message = $"{npc.Name} is already with you." };
+
+        // Ask NPC if they will join via LLM
+        var prompt = $"The player asks you to follow them and join their party. Will you accept and follow them?";
+        var messages = new List<ChatMessage>
+        {
+            new() { Role = "system", Content = $"You are {npc.Name}. Decide whether you want to follow the player and join their party." },
+            new() { Role = "user", Content = prompt }
+        };
+
+        try
+        {
+            var response = await _ollamaClient.ChatAsync(messages);
+            var lowerResponse = response.ToLower();
+
+            // Simple yes/no detection
+            var willFollow = lowerResponse.Contains("yes") || lowerResponse.Contains("accept") ||
+                           lowerResponse.Contains("agree") || lowerResponse.Contains("glad") ||
+                           lowerResponse.Contains("definitely") || lowerResponse.Contains("sure") ||
+                           lowerResponse.Contains("absolutely") || !lowerResponse.Contains("no");
+
+            if (willFollow)
+            {
+                _gameState.AddCompanion(npc.Id);
+                Console.WriteLine($"[DEBUG] {npc.Name} joined the party");
+                return new ActionResult { Success = true, Message = $"{npc.Name} says: \"{response}\"\n\n{npc.Name} joins your party and will follow you." };
+            }
+            else
+            {
+                return new ActionResult { Success = true, Message = $"{npc.Name} says: \"{response}\"" };
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DEBUG] Error asking NPC to follow: {ex.Message}");
+            return new ActionResult { Success = false, Message = $"{npc.Name} seems confused." };
+        }
     }
 
     private async Task<ActionResult> HandleGiveAsync(string npcName, string requestText)
@@ -1571,9 +1651,16 @@ Use vivid, engaging language.";
             ? string.Join(", ", npc.CarriedItems.Values.Select(ii => ii.Item.Name))
             : "nothing";
 
+        var canFollow = npc.CanJoinParty ? "YES - You can agree to follow the player" : "NO - You cannot follow anyone";
+
         return $@"You are {npc.Name}, an NPC in a fantasy RPG world.
 Health: {npc.Health}/{npc.MaxHealth}, Level: {npc.Level}
 You are carrying: {itemsList}
+
+WHAT YOU CAN DO:
+1. TALK: Respond naturally to what the player says
+2. GIVE ITEMS: You can give items to the player IF you have them
+3. FOLLOW: {canFollow}
 
 IMPORTANT CONSTRAINTS:
 - You can ONLY give or trade items that you are actually carrying: {itemsList}
@@ -1581,9 +1668,10 @@ IMPORTANT CONSTRAINTS:
 - If asked for items you do have, you can offer to give them
 - When you agree to give items, respond with: GIVE_ITEMS: [item1, item2, ...]
 - Do NOT pretend to have items you don't actually have listed above
+- If you cannot follow, politely decline if asked
 
 Keep responses brief (1-3 sentences) and stay in character.
-Be helpful and realistic about your inventory constraints.
+Be helpful and realistic about your inventory constraints and abilities.
 Respond naturally to player interactions.";
     }
 
@@ -1604,6 +1692,52 @@ Respond naturally to player interactions.";
         catch
         {
             return new ActionPlan { Action = "help", Target = "", Details = "" };
+        }
+    }
+
+    /// <summary>
+    /// Convert raw player command into a natural message for the NPC.
+    /// Example: "Ask Chen to follow" → "The player asks you to follow"
+    /// This prevents the NPC from interpreting player commands as instructions.
+    /// </summary>
+    private async Task<string> ConvertPlayerCommandToNpcMessageAsync(string playerCommand, string npcName)
+    {
+        var prompt = $@"Convert this player command into a natural message from the player to the NPC named {npcName}.
+The message should be in third person and frame it as the player saying/asking something.
+
+Examples:
+- ""ask Chen for stims"" → ""The player asks you for stims""
+- ""ask Chen to follow"" → ""The player asks you to follow""
+- ""tell Chen I'm ready"" → ""The player tells you they're ready""
+- ""Chen, help me"" → ""The player asks for your help""
+
+Player command: ""{playerCommand}""
+
+Return ONLY the converted message - no other text, no markdown, just the message itself.";
+
+        var messages = new List<ChatMessage>
+        {
+            new() { Role = "system", Content = "You are a message converter. Convert player commands to natural messages for NPCs." },
+            new() { Role = "user", Content = prompt }
+        };
+
+        try
+        {
+            var response = await _ollamaClient.ChatAsync(messages);
+            var convertedMessage = response.Trim();
+
+            // Ensure it's not empty
+            if (string.IsNullOrWhiteSpace(convertedMessage))
+                return $"The player says: \"{playerCommand}\"";
+
+            Console.WriteLine($"[DEBUG] Converted command '{playerCommand}' to message: '{convertedMessage}'");
+            return convertedMessage;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DEBUG] Error converting player command to NPC message: {ex.Message}");
+            // Fallback: simple formatting
+            return $"The player says: \"{playerCommand}\"";
         }
     }
 }
