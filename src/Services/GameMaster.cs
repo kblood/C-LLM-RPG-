@@ -491,6 +491,82 @@ Now create vivid, engaging narrative (2-3 sentences) that describes what happene
     }
 
     /// <summary>
+    /// Ask an NPC what items they're willing to give (decision step).
+    /// Returns structured JSON decision, not dialogue.
+    /// </summary>
+    private async Task<NpcGiveDecision> GetNpcGiveDecisionAsync(Character npc, string playerRequest)
+    {
+        var itemsList = npc.CarriedItems.Count > 0
+            ? string.Join(", ", npc.CarriedItems.Values.Select(ii => $"{ii.Item.Name}"))
+            : "nothing";
+
+        var prompt = $@"The player asks: ""{playerRequest}""
+
+Your inventory: {itemsList}
+
+Respond ONLY with JSON (no markdown, no explanation):
+{{
+  ""willGive"": true/false,
+  ""itemsToGive"": [""item1"", ""item2""],
+  ""reason"": ""why you will or won't give"",
+  ""narrative"": ""what you say to the player about this""
+}}
+
+RULES:
+1. willGive = true ONLY if you have items the player requested
+2. itemsToGive = list of items you actually have from what they requested
+3. reason = brief explanation (e.g. ""I don't have food"" or ""Happy to help"")
+4. narrative = your dialogue response to them (1-2 sentences, stay in character)
+5. Return ONLY the JSON - no other text
+6. Never claim to have items not in your inventory list above";
+
+        var messages = new List<ChatMessage>
+        {
+            new() { Role = "system", Content = $"You are {npc.Name}. Decide what items to give the player based on your inventory." },
+            new() { Role = "user", Content = prompt }
+        };
+
+        try
+        {
+            var response = await _ollamaClient.ChatAsync(messages);
+            Console.WriteLine($"[DEBUG] NPC Give Decision Response:\n{response}\n[DEBUG] ---");
+
+            return ParseGiveDecisionJson(response);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DEBUG] Error getting NPC give decision: {ex.Message}");
+            return new NpcGiveDecision { WillGive = false, Reason = "I'm confused", Narrative = "Sorry, I'm not sure what you want." };
+        }
+    }
+
+    /// <summary>
+    /// Parse NPC's JSON give decision response.
+    /// </summary>
+    private NpcGiveDecision ParseGiveDecisionJson(string jsonResponse)
+    {
+        try
+        {
+            // Try to extract JSON from response
+            var jsonStart = jsonResponse.IndexOf('{');
+            var jsonEnd = jsonResponse.LastIndexOf('}');
+
+            if (jsonStart >= 0 && jsonEnd > jsonStart)
+            {
+                var jsonStr = jsonResponse.Substring(jsonStart, jsonEnd - jsonStart + 1);
+                var decision = System.Text.Json.JsonSerializer.Deserialize<NpcGiveDecision>(jsonStr, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                return decision ?? new NpcGiveDecision { WillGive = false, Reason = "Error parsing response" };
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DEBUG] Error parsing give decision JSON: {ex.Message}");
+        }
+
+        return new NpcGiveDecision { WillGive = false, Reason = "Unable to understand" };
+    }
+
+    /// <summary>
     /// Fallback parser for simple commands that the LLM might miss
     /// </summary>
     private ActionPlan? TryParseFallback(string playerCommand, Room currentRoom)
@@ -1001,63 +1077,43 @@ Action Result: {result.Message}";
         if (npc == null)
             return new ActionResult { Success = false, Message = $"You don't see '{npcName}' here to ask for items." };
 
-        // Ask the NPC if they're willing to give items
-        string npcResponse = "";
-        if (_npcBrains.ContainsKey(npc.Id))
+        // STEP 1: Get NPC's decision about what items to give (structured JSON)
+        var decision = await GetNpcGiveDecisionAsync(npc, requestText);
+
+        var resultMessage = new StringBuilder();
+        resultMessage.AppendLine($"{npc.Name} says: \"{decision.Narrative}\"");
+
+        // STEP 2: If NPC decided to give items, transfer them
+        if (decision.WillGive && decision.ItemsToGive.Count > 0)
         {
-            var itemRequest = $"The player asks: {requestText}";
-            npcResponse = await _npcBrains[npc.Id].RespondToPlayerAsync(itemRequest);
-        }
+            var itemsGiven = new List<string>();
 
-        // Check if the NPC agreed to give items (look for GIVE_ITEMS marker)
-        if (npcResponse.Contains("GIVE_ITEMS:"))
-        {
-            // Parse the items to give
-            var giveMarkerIndex = npcResponse.IndexOf("GIVE_ITEMS:");
-            var afterMarker = npcResponse.Substring(giveMarkerIndex + "GIVE_ITEMS:".Length);
-
-            // Find the bracketed list
-            var itemListStart = afterMarker.IndexOf('[');
-            var itemListEnd = afterMarker.IndexOf(']');
-
-            if (itemListStart >= 0 && itemListEnd > itemListStart)
+            foreach (var requestedItemName in decision.ItemsToGive)
             {
-                var itemListStr = afterMarker.Substring(itemListStart + 1, itemListEnd - itemListStart - 1);
-                var itemNames = itemListStr.Split(',').Select(s => s.Trim()).ToList();
+                // Find the item in NPC's inventory
+                var npcItem = npc.CarriedItems.FirstOrDefault(kvp =>
+                    kvp.Value.Item.Name.Equals(requestedItemName, StringComparison.OrdinalIgnoreCase));
 
-                // Give the items from NPC inventory to player
-                var itemsGiven = new List<string>();
-                foreach (var itemName in itemNames)
+                if (npcItem.Key != null)
                 {
-                    // Find the item in NPC's inventory
-                    var npcItem = npc.CarriedItems.FirstOrDefault(kvp =>
-                        kvp.Value.Item.Name.Equals(itemName, StringComparison.OrdinalIgnoreCase));
+                    var item = npcItem.Value.Item;
+                    var quantity = npcItem.Value.Quantity;
 
-                    if (npcItem.Key != null)
-                    {
-                        var item = npcItem.Value.Item;
-                        var quantity = npcItem.Value.Quantity;
-
-                        // Transfer from NPC to player
-                        _gameState.PlayerInventory.AddItem(item, quantity);
-                        npc.CarriedItems.Remove(item.Id);
-                        itemsGiven.Add($"{item.Name} (x{quantity})");
-                    }
+                    // Transfer from NPC to player
+                    _gameState.PlayerInventory.AddItem(item, quantity);
+                    npc.CarriedItems.Remove(item.Id);
+                    itemsGiven.Add($"{item.Name} (x{quantity})");
                 }
+            }
 
-                if (itemsGiven.Count > 0)
-                {
-                    // Remove GIVE_ITEMS marker from the response for cleaner output
-                    var cleanResponse = npcResponse.Substring(0, giveMarkerIndex).Trim();
-                    var resultMessage = $"{npc.Name} says: \"{cleanResponse}\"\n\nYou received: {string.Join(", ", itemsGiven)}";
-                    return new ActionResult { Success = true, Message = resultMessage };
-                }
+            if (itemsGiven.Count > 0)
+            {
+                resultMessage.AppendLine();
+                resultMessage.AppendLine($"✓ You received: {string.Join(", ", itemsGiven)}");
             }
         }
 
-        // NPC didn't agree or couldn't give items - just show the response
-        var message = $"{npc.Name} says: \"{npcResponse}\"";
-        return new ActionResult { Success = true, Message = message };
+        return new ActionResult { Success = true, Message = resultMessage.ToString().TrimEnd() };
     }
 
     private ActionResult HandleAttack(string npcName)
@@ -1526,4 +1582,23 @@ public class ActionResult
 {
     public bool Success { get; set; }
     public string Message { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Represents an NPC's decision about what items they're willing to give.
+/// Decouples item transfer from dialogue/narrative.
+/// </summary>
+public class NpcGiveDecision
+{
+    [JsonPropertyName("willGive")]
+    public bool WillGive { get; set; } = false;
+
+    [JsonPropertyName("itemsToGive")]
+    public List<string> ItemsToGive { get; set; } = new();
+
+    [JsonPropertyName("reason")]
+    public string Reason { get; set; } = string.Empty;
+
+    [JsonPropertyName("narrative")]
+    public string Narrative { get; set; } = string.Empty;
 }
