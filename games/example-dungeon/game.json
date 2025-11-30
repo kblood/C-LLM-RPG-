@@ -1,0 +1,40 @@
+{
+  "id": "example-dungeon",
+  "title": "The Forgotten Dungeon",
+  "subtitle": "A Test Adventure",
+  "version": "1.0.0",
+  "description": "An example dungeon created from JSON to test the dynamic RPG loading system.",
+  "gameSettings": {
+    "startingRoomId": "entrance_hall",
+    "winConditionRoomIds": ["treasure_vault"],
+    "maxTurns": 100,
+    "playerStartingHealth": 100,
+    "playerStartingLevel": 1,
+    "aiModel": "granite4:3b",
+    "ollamaUrl": "http://localhost:11434"
+  },
+  "style": {
+    "theme": "Fantasy",
+    "tonality": "adventure-mystery",
+    "narratorVoice": "storytelling"
+  },
+  "features": {
+    "enableCombat": true,
+    "enableDialogue": true,
+    "enableQuests": true,
+    "enableLooting": true,
+    "enableEquipment": true,
+    "enableNPCPatrol": false,
+    "enableDynamicDifficulty": false
+  },
+  "startingItems": [
+    { "itemId": "iron_sword", "quantity": 1 },
+    { "itemId": "leather_armor", "quantity": 1 }
+  ],
+  "metadata": {
+    "author": "Test Creator",
+    "createdDate": "2025-11-30",
+    "lastModified": "2025-11-30",
+    "tags": ["fantasy", "dungeon", "test", "json"]
+  }
+}

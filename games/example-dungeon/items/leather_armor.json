@@ -1,0 +1,38 @@
+{
+  "id": "leather_armor",
+  "name": "Leather Armor",
+  "description": "Light leather armor that provides basic protection without sacrificing mobility.",
+  "type": "armor",
+  "rarity": "common",
+  "stats": {
+    "damageBonus": 0,
+    "armorBonus": 2,
+    "criticalChance": 0
+  },
+  "equipment": {
+    "isEquippable": true,
+    "equipmentSlot": "chest",
+    "weight": 5,
+    "durability": 80,
+    "maxDurability": 80
+  },
+  "effects": {
+    "onEquip": "You don the leather armor.",
+    "onUse": null,
+    "onUnequip": "You remove the leather armor."
+  },
+  "requirements": {
+    "minLevel": 1,
+    "minStrength": 6,
+    "restrictions": null
+  },
+  "value": {
+    "goldValue": 60,
+    "sellPrice": 40
+  },
+  "metadata": {
+    "tags": ["armor", "protection", "starter"],
+    "craftable": false,
+    "tradeable": true
+  }
+}

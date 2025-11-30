@@ -1,0 +1,38 @@
+{
+  "id": "healing_potion",
+  "name": "Healing Potion",
+  "description": "A glowing red potion that restores health when consumed.",
+  "type": "consumable",
+  "rarity": "common",
+  "stats": {
+    "damageBonus": 0,
+    "armorBonus": 0,
+    "criticalChance": 0
+  },
+  "equipment": {
+    "isEquippable": false,
+    "equipmentSlot": null,
+    "weight": 1,
+    "durability": 100,
+    "maxDurability": 100
+  },
+  "effects": {
+    "onEquip": null,
+    "onUse": "You drink the potion and feel refreshed.",
+    "onUnequip": null
+  },
+  "requirements": {
+    "minLevel": 1,
+    "minStrength": 0,
+    "restrictions": null
+  },
+  "value": {
+    "goldValue": 25,
+    "sellPrice": 15
+  },
+  "metadata": {
+    "tags": ["consumable", "healing", "potion"],
+    "craftable": true,
+    "tradeable": true
+  }
+}

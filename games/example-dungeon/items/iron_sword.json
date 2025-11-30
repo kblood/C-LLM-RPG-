@@ -1,0 +1,38 @@
+{
+  "id": "iron_sword",
+  "name": "Iron Sword",
+  "description": "A well-crafted iron sword, suitable for a beginner adventurer.",
+  "type": "weapon",
+  "rarity": "common",
+  "stats": {
+    "damageBonus": 5,
+    "armorBonus": 0,
+    "criticalChance": 0
+  },
+  "equipment": {
+    "isEquippable": true,
+    "equipmentSlot": "main_hand",
+    "weight": 3,
+    "durability": 100,
+    "maxDurability": 100
+  },
+  "effects": {
+    "onEquip": "You grip the iron sword firmly.",
+    "onUse": "You swing the sword at your opponent.",
+    "onUnequip": "You sheathe the sword."
+  },
+  "requirements": {
+    "minLevel": 1,
+    "minStrength": 8,
+    "restrictions": null
+  },
+  "value": {
+    "goldValue": 50,
+    "sellPrice": 35
+  },
+  "metadata": {
+    "tags": ["weapon", "melee", "starter"],
+    "craftable": false,
+    "tradeable": true
+  }
+}

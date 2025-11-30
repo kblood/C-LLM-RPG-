@@ -1,0 +1,31 @@
+{
+  "id": "treasure_vault",
+  "name": "Treasure Vault",
+  "description": "You have reached the treasure vault! Gold coins are stacked in neat piles, and jewels glitter in the light of magical torches. Ancient artifacts line the walls. You have successfully navigated the dungeon and claimed its greatest prize!",
+  "type": "indoor",
+  "exits": [
+    {
+      "id": "exit-back",
+      "displayName": "Back to Merchant Stall",
+      "direction": "west",
+      "destinationRoomId": "merchant_stall",
+      "description": "The way back to the merchant stall",
+      "requiresItem": null,
+      "requiresKey": null,
+      "locked": false
+    }
+  ],
+  "npcs": [],
+  "items": [],
+  "ambiance": {
+    "soundscape": "magical-humming",
+    "lightingLevel": "bright",
+    "temperature": "cool"
+  },
+  "hazards": [],
+  "metadata": {
+    "difficulty": "safe",
+    "tags": ["treasure", "victory"],
+    "visitedCount": 0
+  }
+}

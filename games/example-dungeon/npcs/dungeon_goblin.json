@@ -1,0 +1,60 @@
+{
+  "id": "dungeon_goblin",
+  "name": "Gruk the Goblin",
+  "title": "Dungeon Inhabitant",
+  "description": "A scrappy green goblin with sharp teeth and shifty eyes. He seems hostile at first glance.",
+  "portrait": "A small green creature with pointed ears and a cruel grin.",
+  "stats": {
+    "health": 25,
+    "maxHealth": 25,
+    "level": 1,
+    "experience": 0,
+    "strength": 8,
+    "agility": 12,
+    "armor": 0
+  },
+  "role": "warrior",
+  "alignment": "evil",
+  "personality": {
+    "personalityPrompt": "You are Gruk, a hostile goblin guard in this dungeon. You are quick and agile but not particularly strong. You attack intruders on sight and speak in broken, crude language. You are carrying a wooden club.",
+    "traits": ["aggressive", "quick", "crude"],
+    "favoriteTopics": ["treasure", "fighting", "food"],
+    "dislikedTopics": ["humans", "elves", "peace"]
+  },
+  "location": {
+    "currentRoomId": "guard_chamber",
+    "homeRoomId": "guard_chamber",
+    "patrolRoomIds": null,
+    "patrolIntervalTurns": null,
+    "canMove": false,
+    "canJoinParty": false
+  },
+  "inventory": [
+    {
+      "itemId": "healing_potion",
+      "quantity": 1,
+      "loot": true
+    }
+  ],
+  "dialogue": {
+    "greeting": "Who dares enter my dungeon?!",
+    "farewell": "You've bested me, adventurer... *dies*",
+    "defaultResponse": "Gruk not understand!",
+    "reactions": {
+      "onPlayerHurt": "Ha! You bleed, human!",
+      "onPlayerHealed": "No! You heal yourself!",
+      "onCombatStart": "You want fight? Gruk give you fight!"
+    }
+  },
+  "relationships": {
+    "allies": [],
+    "enemies": [],
+    "neutral": []
+  },
+  "quests": [],
+  "behaviors": {
+    "combatStyle": "aggressive",
+    "aiAggression": "high",
+    "fleePath": null
+  }
+}

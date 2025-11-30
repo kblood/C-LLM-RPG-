@@ -1,0 +1,48 @@
+{
+  "id": "merchant_stall",
+  "name": "Merchant Stall",
+  "description": "A surprisingly well-maintained trading post in the depths of the dungeon. Fine goods are displayed on shelves, and a comfortable-looking merchant sits behind the counter. The air smells of spices and leather goods.",
+  "type": "indoor",
+  "exits": [
+    {
+      "id": "exit-to-guard-chamber",
+      "displayName": "Back to Guard Chamber",
+      "direction": "south",
+      "destinationRoomId": "guard_chamber",
+      "description": "The way back to the guard chamber",
+      "requiresItem": null,
+      "requiresKey": null,
+      "locked": false
+    },
+    {
+      "id": "exit-to-vault",
+      "displayName": "To the Treasure Vault",
+      "direction": "east",
+      "destinationRoomId": "treasure_vault",
+      "description": "A narrow passage leading deeper into the dungeon",
+      "requiresItem": null,
+      "requiresKey": null,
+      "locked": false
+    }
+  ],
+  "npcs": [
+    {
+      "npcId": "merchant_gerald",
+      "spawnOnEnter": true,
+      "hostility": "friendly",
+      "approachMessage": "A friendly merchant waves at you from behind his counter."
+    }
+  ],
+  "items": [],
+  "ambiance": {
+    "soundscape": "ambient-trading-sounds",
+    "lightingLevel": "bright",
+    "temperature": "warm"
+  },
+  "hazards": [],
+  "metadata": {
+    "difficulty": "easy",
+    "tags": ["safe", "trading"],
+    "visitedCount": 0
+  }
+}

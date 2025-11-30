@@ -1,0 +1,60 @@
+{
+  "id": "merchant_gerald",
+  "name": "Gerald the Merchant",
+  "title": "Trader",
+  "description": "A rotund merchant with a friendly demeanor. He seems to have set up shop in this dungeon for some reason.",
+  "portrait": "A portly man with a bushy beard, wearing fine traveling clothes.",
+  "stats": {
+    "health": 40,
+    "maxHealth": 40,
+    "level": 1,
+    "experience": 0,
+    "strength": 8,
+    "agility": 8,
+    "armor": 1
+  },
+  "role": "merchant",
+  "alignment": "neutral",
+  "personality": {
+    "personalityPrompt": "You are Gerald, a merchant who has set up shop in this dungeon. You are friendly and helpful, interested in trading with adventurers. You appreciate good conversation and have a sense of humor. You are carrying healing potions and other goods to trade.",
+    "traits": ["friendly", "talkative", "mercenary"],
+    "favoriteTopics": ["business", "trade", "profit"],
+    "dislikedTopics": ["theft", "violence", "bad deals"]
+  },
+  "location": {
+    "currentRoomId": "merchant_stall",
+    "homeRoomId": "merchant_stall",
+    "patrolRoomIds": null,
+    "patrolIntervalTurns": null,
+    "canMove": false,
+    "canJoinParty": false
+  },
+  "inventory": [
+    {
+      "itemId": "healing_potion",
+      "quantity": 3,
+      "loot": false
+    }
+  ],
+  "dialogue": {
+    "greeting": "Welcome, friend! Care to browse my wares?",
+    "farewell": "Safe travels, adventurer!",
+    "defaultResponse": "Interesting proposal, let me think about it.",
+    "reactions": {
+      "onPlayerHurt": "Oh no! Are you alright? I have potions for sale!",
+      "onPlayerHealed": "Glad you're feeling better!",
+      "onCombatStart": "Please, no violence in my stall!"
+    }
+  },
+  "relationships": {
+    "allies": [],
+    "enemies": ["dungeon_goblin"],
+    "neutral": []
+  },
+  "quests": [],
+  "behaviors": {
+    "combatStyle": "defensive",
+    "aiAggression": "low",
+    "fleePath": "merchant_stall"
+  }
+}

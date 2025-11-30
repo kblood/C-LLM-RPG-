@@ -5,6 +5,7 @@ using CSharpRPGBackend.Games;
 
 const string ollamaUrl = "http://localhost:11434";
 const string ollamaModel = "granite4:3b"; // Using Granite 4 3B - lightweight and fast
+var gamesDirectory = Path.Combine(Directory.GetCurrentDirectory(), "games");
 
 // Check if we're in replay mode
 if (args.Length > 0 && args[0] == "replay")
@@ -35,14 +36,40 @@ async Task RunReplayMode()
     Console.WriteLine("✓ Connected to Ollama");
     Console.WriteLine($"Using model: {ollamaModel}\n");
 
-    // Play both games
-    var games = new[]
-    {
-        ("Fantasy Quest", FantasyQuest.Create()),
-        ("Sci-Fi Adventure", SciFiAdventure.Create())
-    };
+    // Collect games for replay (static games + dynamic games)
+    var gameLoader = new GameLoader();
+    var gamesToReplay = new List<(string name, Game game)>();
 
-    foreach (var (gameName, game) in games)
+    // Add static games
+    gamesToReplay.Add(("Fantasy Quest", FantasyQuest.Create()));
+    gamesToReplay.Add(("Sci-Fi Adventure", SciFiAdventure.Create()));
+
+    // Add JSON-based games if available
+    if (Directory.Exists(gamesDirectory))
+    {
+        try
+        {
+            var gameInfos = gameLoader.FindAvailableGames(gamesDirectory);
+            foreach (var gameInfo in gameInfos)
+            {
+                try
+                {
+                    var loadedGame = await gameLoader.LoadGameAsync(gameInfo.GameDirectory);
+                    gamesToReplay.Add((gameInfo.Title, loadedGame));
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Warning: Failed to load {gameInfo.Title}: {ex.Message}");
+                }
+            }
+        }
+        catch
+        {
+            // Silently continue without JSON games
+        }
+    }
+
+    foreach (var (gameName, game) in gamesToReplay)
     {
         Console.WriteLine($"\n{'='*60}");
         Console.WriteLine($"Playing: {gameName}");
@@ -56,12 +83,45 @@ async Task RunReplayMode()
             gameState.NPCs = game.NPCs;
             gameState.CurrentRoomId = game.StartingRoomId;
 
-            // Add items to inventory
-            foreach (var item in game.Items.Values)
+            // Add starting items to inventory
+            if (game.CustomSettings.ContainsKey("startingItems"))
             {
-                if (item.Type == ItemType.Weapon || item.Type == ItemType.Armor)
+                try
                 {
-                    gameState.PlayerInventory.AddItem(item, 1);
+                    var startingItemsJson = game.CustomSettings["startingItems"];
+                    var startingItems = System.Text.Json.JsonSerializer.Deserialize<List<StartingItemDefinition>>(startingItemsJson);
+                    if (startingItems != null)
+                    {
+                        foreach (var startingItem in startingItems)
+                        {
+                            if (game.Items.TryGetValue(startingItem.ItemId, out var item))
+                            {
+                                gameState.PlayerInventory.AddItem(item, startingItem.Quantity);
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                    // Fallback to default
+                    foreach (var item in game.Items.Values)
+                    {
+                        if (item.Type == ItemType.Weapon || item.Type == ItemType.Armor)
+                        {
+                            gameState.PlayerInventory.AddItem(item, 1);
+                        }
+                    }
+                }
+            }
+            else
+            {
+                // Default behavior for static games
+                foreach (var item in game.Items.Values)
+                {
+                    if (item.Type == ItemType.Weapon || item.Type == ItemType.Armor)
+                    {
+                        gameState.PlayerInventory.AddItem(item, 1);
+                    }
                 }
             }
 
@@ -98,15 +158,58 @@ async Task RunReplayMode()
 
 async Task RunInteractiveMode()
 {
-    // Choose a game
+    // Collect available games (both static and dynamic)
+    var staticGames = new List<(string label, Game game, string? gameDir)>
+    {
+        ("Fantasy Quest - The Dragon's Hoard", FantasyQuest.Create(), null),
+        ("Sci-Fi Adventure - Escape from Station Zeta", SciFiAdventure.Create(), null)
+    };
+
+    var gameLoader = new GameLoader();
+    var dynamicGames = new List<(string label, Game game, string? gameDir)>();
+
+    // Load dynamic games from the games/ directory
+    if (Directory.Exists(gamesDirectory))
+    {
+        var gameInfos = gameLoader.FindAvailableGames(gamesDirectory);
+        foreach (var gameInfo in gameInfos)
+        {
+            try
+            {
+                var loadedGame = await gameLoader.LoadGameAsync(gameInfo.GameDirectory);
+                dynamicGames.Add((gameInfo.ToString(), loadedGame, gameInfo.GameDirectory));
+            }
+            catch
+            {
+                // Skip games that fail to load
+            }
+        }
+    }
+
+    // Display game selection menu
     Console.WriteLine("=== C# RPG Backend - Game Selector ===\n");
     Console.WriteLine("Available Games:");
-    Console.WriteLine("1. Fantasy Quest - The Dragon's Hoard");
-    Console.WriteLine("2. Sci-Fi Adventure - Escape from Station Zeta");
-    Console.WriteLine("\nSelect a game (1-2): ");
+
+    var allGames = new List<(string label, Game game, string? gameDir)>();
+    allGames.AddRange(staticGames);
+    allGames.AddRange(dynamicGames);
+
+    for (int i = 0; i < allGames.Count; i++)
+    {
+        var type = staticGames.Contains(allGames[i]) ? "[STATIC]" : "[JSON]";
+        Console.WriteLine($"{i + 1}. {allGames[i].label} {type}");
+    }
+
+    Console.WriteLine($"\nSelect a game (1-{allGames.Count}): ");
 
     var gameChoice = Console.ReadLine();
-    Game game = gameChoice == "2" ? SciFiAdventure.Create() : FantasyQuest.Create();
+    if (!int.TryParse(gameChoice, out var choiceIndex) || choiceIndex < 1 || choiceIndex > allGames.Count)
+    {
+        Console.WriteLine("Invalid selection. Loading default game...");
+        choiceIndex = 1;
+    }
+
+    var (selectedLabel, game, selectedGameDir) = allGames[choiceIndex - 1];
 
     Console.WriteLine($"\nLoading: {game.Title}");
     if (!string.IsNullOrWhiteSpace(game.StoryIntroduction))
@@ -139,12 +242,47 @@ async Task RunInteractiveMode()
     gameState.NPCs = game.NPCs;
     gameState.CurrentRoomId = game.StartingRoomId;
 
-    // Add items to player inventory as starting equipment
-    foreach (var item in game.Items.Values)
+    // Add starting items to player inventory
+    // For JSON games, use startingItems from the game definition
+    // For static games, add all weapons and armor
+    if (game.CustomSettings.ContainsKey("startingItems"))
     {
-        if (item.Type == ItemType.Weapon || item.Type == ItemType.Armor)
+        try
         {
-            gameState.PlayerInventory.AddItem(item, 1);
+            var startingItemsJson = game.CustomSettings["startingItems"];
+            var startingItems = System.Text.Json.JsonSerializer.Deserialize<List<StartingItemDefinition>>(startingItemsJson);
+            if (startingItems != null)
+            {
+                foreach (var startingItem in startingItems)
+                {
+                    if (game.Items.TryGetValue(startingItem.ItemId, out var item))
+                    {
+                        gameState.PlayerInventory.AddItem(item, startingItem.Quantity);
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // Fallback to default behavior
+            foreach (var item in game.Items.Values)
+            {
+                if (item.Type == ItemType.Weapon || item.Type == ItemType.Armor)
+                {
+                    gameState.PlayerInventory.AddItem(item, 1);
+                }
+            }
+        }
+    }
+    else
+    {
+        // Default behavior for static games
+        foreach (var item in game.Items.Values)
+        {
+            if (item.Type == ItemType.Weapon || item.Type == ItemType.Armor)
+            {
+                gameState.PlayerInventory.AddItem(item, 1);
+            }
         }
     }
 

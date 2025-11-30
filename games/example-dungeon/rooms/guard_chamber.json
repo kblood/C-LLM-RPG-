@@ -1,0 +1,48 @@
+{
+  "id": "guard_chamber",
+  "name": "Guard Chamber",
+  "description": "This chamber appears to be a guard post. Crude furniture and supplies are scattered about. The smell of unwashed goblin permeates the air. Blood stains mar the stone floor, suggesting many battles have taken place here.",
+  "type": "indoor",
+  "exits": [
+    {
+      "id": "exit-to-entrance",
+      "displayName": "Back to Entrance",
+      "direction": "west",
+      "destinationRoomId": "entrance_hall",
+      "description": "The way back to the entrance",
+      "requiresItem": null,
+      "requiresKey": null,
+      "locked": false
+    },
+    {
+      "id": "exit-to-merchant",
+      "displayName": "To the Merchant Stall",
+      "direction": "north",
+      "destinationRoomId": "merchant_stall",
+      "description": "A well-lit area with goods displayed",
+      "requiresItem": null,
+      "requiresKey": null,
+      "locked": false
+    }
+  ],
+  "npcs": [
+    {
+      "npcId": "dungeon_goblin",
+      "spawnOnEnter": true,
+      "hostility": "hostile",
+      "approachMessage": "A scrappy goblin blocks your path!"
+    }
+  ],
+  "items": [],
+  "ambiance": {
+    "soundscape": "growling-creature-sounds",
+    "lightingLevel": "dim",
+    "temperature": "warm"
+  },
+  "hazards": [],
+  "metadata": {
+    "difficulty": "medium",
+    "tags": ["combat", "danger"],
+    "visitedCount": 0
+  }
+}

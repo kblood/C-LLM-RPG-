@@ -1,0 +1,38 @@
+{
+  "id": "entrance_hall",
+  "name": "Dungeon Entrance Hall",
+  "description": "You stand at the entrance of an ancient dungeon. The stone archway is crumbling with age, and a faint breeze carries the smell of damp earth. Torches flicker weakly on the walls, casting dancing shadows on the floor. Before you, a long corridor stretches into darkness.",
+  "type": "indoor",
+  "exits": [
+    {
+      "id": "exit-to-guard-chamber",
+      "displayName": "Into the Dungeon",
+      "direction": "east",
+      "destinationRoomId": "guard_chamber",
+      "description": "A dark corridor leads deeper into the dungeon",
+      "requiresItem": null,
+      "requiresKey": null,
+      "locked": false
+    }
+  ],
+  "npcs": [],
+  "items": [
+    {
+      "itemId": "healing_potion",
+      "spawnOnEnter": true,
+      "quantity": 1,
+      "pickupMessage": "You find a healing potion among the debris."
+    }
+  ],
+  "ambiance": {
+    "soundscape": "dripping-water-distant-echoes",
+    "lightingLevel": "dim",
+    "temperature": "cool"
+  },
+  "hazards": [],
+  "metadata": {
+    "difficulty": "easy",
+    "tags": ["entrance", "safe"],
+    "visitedCount": 0
+  }
+}
