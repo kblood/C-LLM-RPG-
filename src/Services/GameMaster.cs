@@ -212,7 +212,7 @@ IMPORTANT: 'target' MUST contain the specific thing the player referred to:
 - For 'look' -> ""target"":""""
 - For 'inventory' -> ""target"":""""
 
-Valid actions: move, look, inventory, talk, examine, take, drop, use, attack, stop, status, help
+Valid actions: move, look, inventory, talk, examine, take, drop, use, attack, give, stop, status, help
 
 Rules:
 1. Return ONLY the JSON array - no explanation, no code blocks, no markdown
@@ -224,6 +224,7 @@ Rules:
 
 Examples of CORRECT responses:
 Player says 'attack chen' -> [{""action"":""attack"",""target"":""Dr. Sarah Chen"",""details"":""""}]
+Player says 'ask chen for stims' -> [{""action"":""give"",""target"":""Dr. Sarah Chen"",""details"":""stims""}]
 Player says 'search her body' -> [{""action"":""examine"",""target"":""Dr. Sarah Chen"",""details"":""""}]
 Player says 'take the loot' -> [{""action"":""take"",""target"":""loot"",""details"":""""}]
 Player says 'go out' -> [{""action"":""move"",""target"":""Out Into Corridor"",""details"":""""}]
@@ -439,6 +440,7 @@ Now create vivid, engaging narrative (2-3 sentences) that describes what happene
             "examine [item/npc] - Look closely at something",
             "go [direction] - Travel in a direction (natural language works!)",
             "talk [npc] - Speak with an NPC",
+            "give [npc] [items] - Ask an NPC to give you items",
             "use [item] - Use an item (potion, scroll, etc)",
             "take [item] - Pick up an item",
             "drop [item] - Drop an item from inventory",
@@ -650,6 +652,39 @@ Now create vivid, engaging narrative (2-3 sentences) that describes what happene
             }
         }
 
+        // Check for give/request commands (ask for items)
+        if (lower.Contains("give") || lower.Contains("ask for") || lower.Contains("request") ||
+            (lower.Contains("ask") && (lower.Contains("item") || lower.Contains("potion") || lower.Contains("food") ||
+             lower.Contains("stim") || lower.Contains("kit") || lower.Contains("equipment"))))
+        {
+            // Extract NPC name from command
+            var npcNames = currentRoom.NPCIds
+                .Where(id => _gameState.NPCs.ContainsKey(id))
+                .Select(id => _gameState.NPCs[id].Name.ToLower())
+                .ToList();
+
+            foreach (var npcName in npcNames)
+            {
+                if (lower.Contains(npcName))
+                {
+                    // Extract the actual NPC name (not lowercased)
+                    var actualNpc = currentRoom.NPCIds
+                        .FirstOrDefault(id => _gameState.NPCs.ContainsKey(id) &&
+                            _gameState.NPCs[id].Name.ToLower() == npcName);
+
+                    if (actualNpc != null)
+                    {
+                        return new ActionPlan
+                        {
+                            Action = "give",
+                            Target = _gameState.NPCs[actualNpc].Name,
+                            Details = lower // Full command as details for context
+                        };
+                    }
+                }
+            }
+        }
+
         return null;
     }
 
@@ -768,6 +803,7 @@ MATCHING STRATEGY:
             "take" => HandleTake(plan.Target),
             "drop" => HandleDrop(plan.Target),
             "use" => HandleUse(plan.Target),
+            "give" => await HandleGiveAsync(plan.Target, string.IsNullOrEmpty(plan.Details) ? playerCommand : plan.Details),
             "help" => HandleHelp(),
             "status" => HandleStatus(),
             "unknown" => HandleUnknownAction(plan.Target),
@@ -941,6 +977,85 @@ Action Result: {result.Message}";
         }
 
         // Return the NPC's actual response as the message
+        var message = $"{npc.Name} says: \"{npcResponse}\"";
+        return new ActionResult { Success = true, Message = message };
+    }
+
+    private async Task<ActionResult> HandleGiveAsync(string npcName, string requestText)
+    {
+        var room = _gameState.GetCurrentRoom();
+        var npcNameLower = npcName.ToLower();
+
+        // Find the NPC
+        var npc = _gameState.GetNPCInRoom(npcName);
+        if (npc == null)
+        {
+            var npcId = room.NPCIds.FirstOrDefault(id =>
+                _gameState.NPCs.ContainsKey(id) &&
+                _gameState.NPCs[id].Name.ToLower().Contains(npcNameLower));
+
+            if (npcId != null)
+                npc = _gameState.NPCs[npcId];
+        }
+
+        if (npc == null)
+            return new ActionResult { Success = false, Message = $"You don't see '{npcName}' here to ask for items." };
+
+        // Ask the NPC if they're willing to give items
+        string npcResponse = "";
+        if (_npcBrains.ContainsKey(npc.Id))
+        {
+            var itemRequest = $"The player asks: {requestText}";
+            npcResponse = await _npcBrains[npc.Id].RespondToPlayerAsync(itemRequest);
+        }
+
+        // Check if the NPC agreed to give items (look for GIVE_ITEMS marker)
+        if (npcResponse.Contains("GIVE_ITEMS:"))
+        {
+            // Parse the items to give
+            var giveMarkerIndex = npcResponse.IndexOf("GIVE_ITEMS:");
+            var afterMarker = npcResponse.Substring(giveMarkerIndex + "GIVE_ITEMS:".Length);
+
+            // Find the bracketed list
+            var itemListStart = afterMarker.IndexOf('[');
+            var itemListEnd = afterMarker.IndexOf(']');
+
+            if (itemListStart >= 0 && itemListEnd > itemListStart)
+            {
+                var itemListStr = afterMarker.Substring(itemListStart + 1, itemListEnd - itemListStart - 1);
+                var itemNames = itemListStr.Split(',').Select(s => s.Trim()).ToList();
+
+                // Give the items from NPC inventory to player
+                var itemsGiven = new List<string>();
+                foreach (var itemName in itemNames)
+                {
+                    // Find the item in NPC's inventory
+                    var npcItem = npc.CarriedItems.FirstOrDefault(kvp =>
+                        kvp.Value.Item.Name.Equals(itemName, StringComparison.OrdinalIgnoreCase));
+
+                    if (npcItem.Key != null)
+                    {
+                        var item = npcItem.Value.Item;
+                        var quantity = npcItem.Value.Quantity;
+
+                        // Transfer from NPC to player
+                        _gameState.PlayerInventory.AddItem(item, quantity);
+                        npc.CarriedItems.Remove(item.Id);
+                        itemsGiven.Add($"{item.Name} (x{quantity})");
+                    }
+                }
+
+                if (itemsGiven.Count > 0)
+                {
+                    // Remove GIVE_ITEMS marker from the response for cleaner output
+                    var cleanResponse = npcResponse.Substring(0, giveMarkerIndex).Trim();
+                    var resultMessage = $"{npc.Name} says: \"{cleanResponse}\"\n\nYou received: {string.Join(", ", itemsGiven)}";
+                    return new ActionResult { Success = true, Message = resultMessage };
+                }
+            }
+        }
+
+        // NPC didn't agree or couldn't give items - just show the response
         var message = $"{npc.Name} says: \"{npcResponse}\"";
         return new ActionResult { Success = true, Message = message };
     }
@@ -1361,9 +1476,17 @@ Use vivid, engaging language.";
         return $@"You are {npc.Name}, an NPC in a fantasy RPG world.
 Health: {npc.Health}/{npc.MaxHealth}, Level: {npc.Level}
 You are carrying: {itemsList}
+
+IMPORTANT CONSTRAINTS:
+- You can ONLY give or trade items that you are actually carrying: {itemsList}
+- If asked for something you don't have, clearly state you don't have it
+- If asked for items you do have, you can offer to give them
+- When you agree to give items, respond with: GIVE_ITEMS: [item1, item2, ...]
+- Do NOT pretend to have items you don't actually have listed above
+
 Keep responses brief (1-3 sentences) and stay in character.
-Be helpful and mysterious. Respond naturally to player interactions.
-If asked about items, you can tell the player what you're carrying.";
+Be helpful and realistic about your inventory constraints.
+Respond naturally to player interactions.";
     }
 
     private static ActionPlan ParseActionJson(string jsonString)
