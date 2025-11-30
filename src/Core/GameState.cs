@@ -277,6 +277,7 @@ public class GameState
 
     /// <summary>
     /// Move all companions to the player's current room.
+    /// Updates both the NPC's location and the room's NPC lists.
     /// </summary>
     public void MoveCompanionsToCurrentRoom()
     {
@@ -287,8 +288,25 @@ public class GameState
             if (NPCs.ContainsKey(companionId))
             {
                 var npc = NPCs[companionId];
-                Console.WriteLine($"[DEBUG]   Moving {npc.Name} from {npc.CurrentRoomId} to {currentRoom}");
+                var oldRoomId = npc.CurrentRoomId;
+                Console.WriteLine($"[DEBUG]   Moving {npc.Name} from {oldRoomId} to {currentRoom}");
+
+                // Remove NPC from old room's NPC list
+                if (!string.IsNullOrEmpty(oldRoomId) && Rooms.ContainsKey(oldRoomId))
+                {
+                    Rooms[oldRoomId].NPCIds.Remove(companionId);
+                    Console.WriteLine($"[DEBUG]     Removed from room {oldRoomId}");
+                }
+
+                // Update NPC's location
                 npc.CurrentRoomId = currentRoom;
+
+                // Add NPC to new room's NPC list if not already there
+                if (Rooms.ContainsKey(currentRoom) && !Rooms[currentRoom].NPCIds.Contains(companionId))
+                {
+                    Rooms[currentRoom].NPCIds.Add(companionId);
+                    Console.WriteLine($"[DEBUG]     Added to room {currentRoom}");
+                }
             }
         }
     }

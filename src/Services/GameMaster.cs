@@ -1176,9 +1176,23 @@ Action Result: {result.Message}";
         if (decision.WillFollow)
         {
             _gameState.AddCompanion(npc.Id);
-            // Move companion to current room immediately
+
+            // Move companion to current room
+            var oldRoomId = npc.CurrentRoomId;
             npc.CurrentRoomId = _gameState.CurrentRoomId;
-            Console.WriteLine($"[DEBUG] {npc.Name} joined the party and moved to {_gameState.GetCurrentRoom().Name}");
+            var newRoom = _gameState.GetCurrentRoom();
+
+            // Update room NPC lists
+            if (!string.IsNullOrEmpty(oldRoomId) && _gameState.Rooms.ContainsKey(oldRoomId))
+            {
+                _gameState.Rooms[oldRoomId].NPCIds.Remove(npc.Id);
+            }
+            if (_gameState.Rooms.ContainsKey(newRoom.Id) && !newRoom.NPCIds.Contains(npc.Id))
+            {
+                newRoom.NPCIds.Add(npc.Id);
+            }
+
+            Console.WriteLine($"[DEBUG] {npc.Name} joined the party and moved to {newRoom.Name}");
             return new ActionResult { Success = true, Message = $"{npc.Name} says: \"{decision.Response}\"\n\n{npc.Name} joins your party and will follow you." };
         }
         else
