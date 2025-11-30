@@ -1039,9 +1039,12 @@ Action Result: {result.Message}";
         {
             var newRoom = _gameState.GetCurrentRoom();
             Console.WriteLine($"[DEBUG] HandleMove: successfully moved to '{newRoom.Name}'");
+            Console.WriteLine($"[DEBUG] HandleMove: Player is now in room {_gameState.CurrentRoomId}");
 
             // Move all companions with the player
+            Console.WriteLine($"[DEBUG] HandleMove: Before moving companions, there are {_gameState.Companions.Count} companions");
             _gameState.MoveCompanionsToCurrentRoom();
+            Console.WriteLine($"[DEBUG] HandleMove: After moving companions");
 
             return new ActionResult
             {
@@ -1167,43 +1170,87 @@ Action Result: {result.Message}";
         if (_gameState.Companions.Contains(npc.Id))
             return new ActionResult { Success = true, Message = $"{npc.Name} is already with you." };
 
-        // Ask NPC if they will join via LLM
-        var prompt = $"The player asks you to follow them and join their party. Will you accept and follow them?";
+        // Get NPC's follow decision using structured JSON (like give system)
+        var decision = await GetNpcFollowDecisionAsync(npc);
+
+        if (decision.WillFollow)
+        {
+            _gameState.AddCompanion(npc.Id);
+            // Move companion to current room immediately
+            npc.CurrentRoomId = _gameState.CurrentRoomId;
+            Console.WriteLine($"[DEBUG] {npc.Name} joined the party and moved to {_gameState.GetCurrentRoom().Name}");
+            return new ActionResult { Success = true, Message = $"{npc.Name} says: \"{decision.Response}\"\n\n{npc.Name} joins your party and will follow you." };
+        }
+        else
+        {
+            return new ActionResult { Success = true, Message = $"{npc.Name} says: \"{decision.Response}\"" };
+        }
+    }
+
+    /// <summary>
+    /// Get structured decision from NPC about whether to follow.
+    /// </summary>
+    private async Task<FollowDecision> GetNpcFollowDecisionAsync(Character npc)
+    {
+        var prompt = @"The player asks you to follow them and join their party.
+
+Respond ONLY with JSON (no markdown, no explanation):
+{
+  ""willFollow"": true/false,
+  ""response"": ""your dialogue response to the player (1-2 sentences)""
+}
+
+RULES:
+1. willFollow = true ONLY if you want to join the party
+2. willFollow = false if you decline
+3. response = what you say to the player in character (1-2 sentences)
+4. Return ONLY the JSON - no other text
+5. Be concise and stay in character";
+
         var messages = new List<ChatMessage>
         {
-            new() { Role = "system", Content = $"You are {npc.Name}. Decide whether you want to follow the player and join their party." },
+            new() { Role = "system", Content = $"You are {npc.Name}. Answer whether you will follow the player. Be direct and honest." },
             new() { Role = "user", Content = prompt }
         };
 
         try
         {
             var response = await _ollamaClient.ChatAsync(messages);
-            var lowerResponse = response.ToLower();
+            Console.WriteLine($"[DEBUG] NPC Follow Decision Response:\n{response}\n[DEBUG] ---");
 
-            // Simple yes/no detection
-            var willFollow = lowerResponse.Contains("yes") || lowerResponse.Contains("accept") ||
-                           lowerResponse.Contains("agree") || lowerResponse.Contains("glad") ||
-                           lowerResponse.Contains("definitely") || lowerResponse.Contains("sure") ||
-                           lowerResponse.Contains("absolutely") || !lowerResponse.Contains("no");
+            return ParseFollowDecisionJson(response);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DEBUG] Error getting NPC follow decision: {ex.Message}");
+            return new FollowDecision { WillFollow = false, Response = "I'm not sure about that." };
+        }
+    }
 
-            if (willFollow)
+    /// <summary>
+    /// Parse JSON follow decision from NPC.
+    /// </summary>
+    private FollowDecision ParseFollowDecisionJson(string jsonResponse)
+    {
+        try
+        {
+            var jsonStart = jsonResponse.IndexOf('{');
+            var jsonEnd = jsonResponse.LastIndexOf('}');
+
+            if (jsonStart >= 0 && jsonEnd > jsonStart)
             {
-                _gameState.AddCompanion(npc.Id);
-                // Move companion to current room immediately
-                npc.CurrentRoomId = _gameState.CurrentRoomId;
-                Console.WriteLine($"[DEBUG] {npc.Name} joined the party and moved to {_gameState.GetCurrentRoom().Name}");
-                return new ActionResult { Success = true, Message = $"{npc.Name} says: \"{response}\"\n\n{npc.Name} joins your party and will follow you." };
-            }
-            else
-            {
-                return new ActionResult { Success = true, Message = $"{npc.Name} says: \"{response}\"" };
+                var jsonStr = jsonResponse.Substring(jsonStart, jsonEnd - jsonStart + 1);
+                var decision = System.Text.Json.JsonSerializer.Deserialize<FollowDecision>(jsonStr,
+                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                return decision ?? new FollowDecision { WillFollow = false, Response = "I cannot decide right now." };
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[DEBUG] Error asking NPC to follow: {ex.Message}");
-            return new ActionResult { Success = false, Message = $"{npc.Name} seems confused." };
+            Console.WriteLine($"[DEBUG] Error parsing follow decision JSON: {ex.Message}");
         }
+
+        return new FollowDecision { WillFollow = false, Response = "I'm uncertain about this." };
     }
 
     private async Task<ActionResult> HandleGiveAsync(string npcName, string requestText)
@@ -1864,6 +1911,18 @@ public class ActionResult
 {
     public bool Success { get; set; }
     public string Message { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Represents an NPC's decision about whether to follow the player.
+/// </summary>
+public class FollowDecision
+{
+    [JsonPropertyName("willFollow")]
+    public bool WillFollow { get; set; } = false;
+
+    [JsonPropertyName("response")]
+    public string Response { get; set; } = string.Empty;
 }
 
 /// <summary>

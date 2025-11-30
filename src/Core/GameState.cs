@@ -281,11 +281,14 @@ public class GameState
     public void MoveCompanionsToCurrentRoom()
     {
         var currentRoom = CurrentRoomId;
+        Console.WriteLine($"[DEBUG] MoveCompanionsToCurrentRoom: Moving {Companions.Count} companions to {currentRoom}");
         foreach (var companionId in Companions)
         {
             if (NPCs.ContainsKey(companionId))
             {
-                NPCs[companionId].CurrentRoomId = currentRoom;
+                var npc = NPCs[companionId];
+                Console.WriteLine($"[DEBUG]   Moving {npc.Name} from {npc.CurrentRoomId} to {currentRoom}");
+                npc.CurrentRoomId = currentRoom;
             }
         }
     }
