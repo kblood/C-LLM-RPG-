@@ -343,9 +343,26 @@ Player says 'look around' -> [{""action"":""look"",""target"":"""",""details"":"
             {
                 dialogueLines.Add(result.Message);
             }
+            // Give actions: show NPC's dialogue directly, narrate the item transfer
+            else if (actionLower == "give")
+            {
+                // HandleGiveAsync formats as: "NPC says: \"dialogue\"\n\n✓ You received: items"
+                // Split on blank line to separate dialogue from item transfer
+                var parts = result.Message.Split(new[] { "\n\n" }, StringSplitOptions.None);
+                if (parts.Length > 0)
+                {
+                    dialogueLines.Add(parts[0]); // NPC dialogue shown directly
+
+                    // If there are items, create a narrated action for the transfer
+                    if (parts.Length > 1 && !string.IsNullOrWhiteSpace(parts[1]))
+                    {
+                        narratedActions.Add(("item transfer", new ActionResult { Success = true, Message = parts[1] }));
+                    }
+                }
+            }
             else
             {
-                // All other actions (examine, give, attack, move, use, etc) get narrated
+                // All other actions (examine, attack, move, use, etc) get narrated
                 narratedActions.Add((action, result));
             }
         }
