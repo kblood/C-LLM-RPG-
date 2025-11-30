@@ -210,4 +210,53 @@ public class CombatService
 
         return result;
     }
+
+    /// <summary>
+    /// Represents companion assistance in combat.
+    /// </summary>
+    public class CompanionAssistance
+    {
+        public bool HasCompanions { get; set; }
+        public int DamageBonus { get; set; }
+        public List<string> CompanionMessages { get; set; } = new();
+    }
+
+    /// <summary>
+    /// Calculate damage bonus and messages from companions assisting in combat.
+    /// Each companion contributes based on their stats.
+    /// </summary>
+    public CompanionAssistance CalculateCompanionAssistance(List<Character> companions)
+    {
+        var assistance = new CompanionAssistance();
+
+        if (companions == null || companions.Count == 0)
+        {
+            assistance.HasCompanions = false;
+            return assistance;
+        }
+
+        assistance.HasCompanions = true;
+        int totalBonus = 0;
+
+        foreach (var companion in companions)
+        {
+            if (!companion.IsAlive)
+                continue;
+
+            // Each companion contributes 20% of their damage output as bonus
+            int companionDamage = companion.GetTotalDamage(null);
+            int contribution = (int)(companionDamage * 0.2);
+            totalBonus += contribution;
+
+            // Add flavor message
+            string message = companion.Strength >= 13 ? $"{companion.Name} strikes a powerful blow!"
+                           : companion.Agility >= 13 ? $"{companion.Name} lands a quick strike!"
+                           : $"{companion.Name} helps press the attack!";
+
+            assistance.CompanionMessages.Add(message);
+        }
+
+        assistance.DamageBonus = totalBonus;
+        return assistance;
+    }
 }

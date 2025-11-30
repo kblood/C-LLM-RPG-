@@ -451,6 +451,24 @@ Now create vivid, engaging narrative (2-3 sentences) that describes what happene
         var playerBar = BuildHealthBar(playerHealthPercent, 20);
         status.AppendLine($"You:      {playerBar} {_gameState.Player.Health}/{_gameState.Player.MaxHealth} HP");
 
+        // Show companions if any
+        var aliveCompanions = _gameState.Companions
+            .Where(id => _gameState.NPCs.ContainsKey(id) && _gameState.NPCs[id].IsAlive)
+            .Select(id => _gameState.NPCs[id])
+            .ToList();
+
+        if (aliveCompanions.Count > 0)
+        {
+            foreach (var companion in aliveCompanions)
+            {
+                var companionHealthPercent = (companion.Health * 100) / companion.MaxHealth;
+                var companionBar = BuildHealthBar(companionHealthPercent, 20);
+                status.AppendLine($"{companion.Name}: {companionBar} {companion.Health}/{companion.MaxHealth} HP 👥");
+            }
+        }
+
+        status.AppendLine();
+
         // Enemy health bar
         var enemyHealthPercent = (npc.Health * 100) / npc.MaxHealth;
         var enemyBar = BuildHealthBar(enemyHealthPercent, 20);
@@ -1263,11 +1281,28 @@ Action Result: {result.Message}";
         _gameState.InCombatMode = true;
         _gameState.CurrentCombatNpcId = npcId;
 
+        // Get companion assistance
+        var companionCharacters = _gameState.Companions
+            .Where(id => _gameState.NPCs.ContainsKey(id) && _gameState.NPCs[id].IsAlive)
+            .Select(id => _gameState.NPCs[id])
+            .ToList();
+
+        var companionAssistance = _combatService.CalculateCompanionAssistance(companionCharacters);
+
         // Resolve combat using CombatService
         var combatResult = _combatService.ResolveAttack(_gameState.Player, npc);
 
         var message = new StringBuilder();
         message.AppendLine(combatResult.Message);
+
+        // Show companion assistance messages
+        if (companionAssistance.HasCompanions)
+        {
+            foreach (var companionMsg in companionAssistance.CompanionMessages)
+            {
+                message.AppendLine(companionMsg);
+            }
+        }
 
         if (!combatResult.WasHit)
         {
@@ -1276,8 +1311,14 @@ Action Result: {result.Message}";
             return new ActionResult { Success = true, Message = message.ToString() };
         }
 
-        // Apply damage to NPC
-        _combatService.ApplyDamage(npc, combatResult.DamageAfterArmor);
+        // Apply damage to NPC (plus companion bonus)
+        int totalDamage = combatResult.DamageAfterArmor + companionAssistance.DamageBonus;
+        _combatService.ApplyDamage(npc, totalDamage);
+
+        if (companionAssistance.DamageBonus > 0)
+        {
+            message.AppendLine($"✦ Companion bonus damage: +{companionAssistance.DamageBonus}");
+        }
 
         // Check if NPC is defeated
         if (!npc.IsAlive)
@@ -1317,7 +1358,63 @@ Action Result: {result.Message}";
 
         message.AppendLine();
         message.AppendLine(GetCombatStatus());
+
+        // Check if any other hostile NPCs in the room want to join the combat
+        CheckForHostileNpcIntervention(npc, message);
+
         return new ActionResult { Success = true, Message = message.ToString() };
+    }
+
+    /// <summary>
+    /// Check if any other NPCs in the room are hostile and would intervene in combat.
+    /// NPCs might join based on alignment, relationships, or if they're companions of the enemy.
+    /// </summary>
+    private void CheckForHostileNpcIntervention(Character enemy, StringBuilder message)
+    {
+        var room = _gameState.GetCurrentRoom();
+        var otherNpcsInRoom = room.NPCIds
+            .Where(id => _gameState.NPCs.ContainsKey(id) && id != enemy.Id && _gameState.NPCs[id].IsAlive)
+            .Select(id => _gameState.NPCs[id])
+            .ToList();
+
+        foreach (var npc in otherNpcsInRoom)
+        {
+            // Skip if this NPC is a companion of the player
+            if (_gameState.Companions.Contains(npc.Id))
+                continue;
+
+            // Determine if NPC is hostile
+            bool isHostile = false;
+            string reason = "";
+
+            // Check alignment: Good NPCs won't attack Good player attacking Evil NPCs
+            // Evil NPCs will attack Good/Neutral players
+            if (npc.Alignment == CharacterAlignment.Evil)
+            {
+                isHostile = true;
+                reason = $"{npc.Name} sees an opportunity to cause trouble!";
+            }
+            else if (npc.Alignment == CharacterAlignment.Good && enemy.Alignment == CharacterAlignment.Evil)
+            {
+                // Good NPC defending against evil attacker - joins on player's side, not against
+                isHostile = false;
+            }
+            else if (enemy.Relationships != null && enemy.Relationships.Contains(npc.Id))
+            {
+                // Enemy has a relationship with this NPC (ally or friend)
+                isHostile = true;
+                reason = $"{npc.Name} rushes to help {enemy.Name}!";
+            }
+
+            if (isHostile)
+            {
+                message.AppendLine();
+                message.AppendLine($"⚠️ {reason}");
+                message.AppendLine($"🚨 {npc.Name} joins the combat against you!");
+                // Note: Actual multi-NPC combat would require expanding the combat system
+                // For now, just warn the player
+            }
+        }
     }
 
     private ActionResult HandleExamine(string targetName, string? playerCommand = null)
