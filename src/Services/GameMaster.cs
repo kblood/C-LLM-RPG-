@@ -323,24 +323,30 @@ Player says 'look around' -> [{""action"":""look"",""target"":"""",""details"":"
 
     /// <summary>
     /// Step 3: Ask the LLM to narrate based on the player's original intent and the actual action results.
+    /// Dialogue actions (talk) are shown directly without narration.
+    /// Other actions with side effects (give, attack, move, etc) are narrated.
     /// </summary>
     private async Task<string> NarrateWithResultsAsync(string playerCommand, List<ActionPlan> actions, List<(string action, ActionResult result)> results)
     {
         var currentRoom = _gameState.GetCurrentRoom();
 
-        // Build results summary, keeping dialogue results separate for display
-        var resultsSummary = new StringBuilder();
+        // Separate dialogue actions from other actions
         var dialogueLines = new List<string>();
+        var narratedActions = new List<(string action, ActionResult result)>();
 
-        resultsSummary.AppendLine("Action Results:");
         foreach (var (action, result) in results)
         {
-            resultsSummary.AppendLine($"- {action}: {result.Message}");
+            var actionLower = action.ToLower();
 
-            // Extract dialogue for special handling
-            if (action.ToLower() == "talk" && result.Message.Contains(" says: "))
+            // Dialogue/talk actions are shown directly, not narrated
+            if (actionLower == "talk")
             {
                 dialogueLines.Add(result.Message);
+            }
+            else
+            {
+                // All other actions (examine, give, attack, move, use, etc) get narrated
+                narratedActions.Add((action, result));
             }
         }
 
@@ -348,19 +354,34 @@ Player says 'look around' -> [{""action"":""look"",""target"":"""",""details"":"
         Console.WriteLine($"[DEBUG]   Original command: {playerCommand}");
         Console.WriteLine($"[DEBUG]   Current location: {currentRoom.Name}");
         Console.WriteLine($"[DEBUG]   Player health: {_gameState.Player.Health}/{_gameState.Player.MaxHealth}");
-        Console.WriteLine($"[DEBUG]   Results:");
-        foreach (var (action, result) in results)
-        {
-            Console.WriteLine($"[DEBUG]     - {action}: {result.Message}");
-        }
+        Console.WriteLine($"[DEBUG]   Dialogue lines: {dialogueLines.Count}");
+        Console.WriteLine($"[DEBUG]   Narrated actions: {narratedActions.Count}");
 
-        // If there's dialogue, show it directly rather than narrating
+        // Build combined output: dialogue first, then narrated actions
+        var output = new StringBuilder();
+
+        // Show dialogue directly
         if (dialogueLines.Count > 0)
         {
-            return string.Join("\n\n", dialogueLines);
+            output.AppendLine(string.Join("\n\n", dialogueLines));
         }
 
-        var context = $@"Player's Original Request: {playerCommand}
+        // Narrate non-dialogue actions
+        if (narratedActions.Count > 0)
+        {
+            if (dialogueLines.Count > 0)
+            {
+                output.AppendLine();
+            }
+
+            var resultsSummary = new StringBuilder();
+            resultsSummary.AppendLine("Action Results:");
+            foreach (var (action, result) in narratedActions)
+            {
+                resultsSummary.AppendLine($"- {action}: {result.Message}");
+            }
+
+            var context = $@"Player's Original Request: {playerCommand}
 
 Current Game State:
 - Location: {currentRoom.Name}
@@ -372,17 +393,21 @@ Current Game State:
 
 Now create vivid, engaging narrative (2-3 sentences) that describes what happened based on the player's intent and the actual results.";
 
-        var messages = new List<ChatMessage>
-        {
-            new()
+            var messages = new List<ChatMessage>
             {
-                Role = "system",
-                Content = @"You are a fantasy RPG narrator. Based on the player's original intent and the actual game results, create an engaging narrative description of what happened. Be creative but accurate to the actual results. If an action failed, describe why. If multiple actions were performed, weave them together into a cohesive narrative."
-            },
-            new() { Role = "user", Content = context }
-        };
+                new()
+                {
+                    Role = "system",
+                    Content = @"You are a fantasy RPG narrator. Based on the player's original intent and the actual game results, create an engaging narrative description of what happened. Be creative but accurate to the actual results. If an action failed, describe why. If multiple actions were performed, weave them together into a cohesive narrative."
+                },
+                new() { Role = "user", Content = context }
+            };
 
-        return await _ollamaClient.ChatAsync(messages);
+            var narrative = await _ollamaClient.ChatAsync(messages);
+            output.AppendLine(narrative);
+        }
+
+        return output.ToString().TrimEnd();
     }
 
     /// <summary>
