@@ -345,6 +345,13 @@ Player says 'look around' -> [{""action"":""look"",""target"":"""",""details"":"
             {
                 dialogueLines.Add(result.Message);
             }
+            // Follow actions: show NPC's dialogue directly, don't narrate
+            else if (actionLower == "follow")
+            {
+                // HandleFollowAsync formats as: "NPC says: \"dialogue\"\n\nNPC joins your party and will follow you."
+                // Show the NPC's response and follow confirmation directly
+                dialogueLines.Add(result.Message);
+            }
             // Give actions: show NPC's dialogue directly, narrate the item transfer
             else if (actionLower == "give")
             {
@@ -1182,7 +1189,9 @@ Action Result: {result.Message}";
             if (willFollow)
             {
                 _gameState.AddCompanion(npc.Id);
-                Console.WriteLine($"[DEBUG] {npc.Name} joined the party");
+                // Move companion to current room immediately
+                npc.CurrentRoomId = _gameState.CurrentRoomId;
+                Console.WriteLine($"[DEBUG] {npc.Name} joined the party and moved to {_gameState.GetCurrentRoom().Name}");
                 return new ActionResult { Success = true, Message = $"{npc.Name} says: \"{response}\"\n\n{npc.Name} joins your party and will follow you." };
             }
             else
