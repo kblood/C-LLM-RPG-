@@ -15,6 +15,16 @@ namespace RPGGameEditor
         private string _currentGamePath = "";
         private readonly string _gamesDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "games");
 
+        // Game content loaded from directories
+        private List<RoomDefinition> _rooms = new();
+        private List<NpcDefinition> _npcs = new();
+        private List<ItemDefinition> _items = new();
+        private List<QuestDefinition> _quests = new();
+
+        // UI controls we need to access
+        private TreeView _treeView;
+        private TabControl _tabControl;
+
         public GameEditorForm()
         {
             InitializeComponent();
@@ -66,23 +76,34 @@ namespace RPGGameEditor
             };
 
             // Left panel: TreeView for game structure
-            var treeView = new TreeView
+            _treeView = new TreeView
             {
                 Dock = DockStyle.Fill
             };
-            splitContainer.Panel1.Controls.Add(treeView);
+
+            // Add context menu to TreeView
+            var contextMenu = new ContextMenuStrip();
+            contextMenu.Items.Add("Add Room", null, (s, e) => AddRoom());
+            contextMenu.Items.Add("Add NPC", null, (s, e) => AddNPC());
+            contextMenu.Items.Add("Add Item", null, (s, e) => AddItem());
+            contextMenu.Items.Add(new ToolStripSeparator());
+            contextMenu.Items.Add("Edit", null, (s, e) => EditSelected());
+            contextMenu.Items.Add("Delete", null, (s, e) => DeleteSelected());
+            _treeView.ContextMenuStrip = contextMenu;
+
+            splitContainer.Panel1.Controls.Add(_treeView);
 
             // Right panel: TabControl for editing
-            var tabControl = new TabControl
+            _tabControl = new TabControl
             {
                 Dock = DockStyle.Fill
             };
-            tabControl.TabPages.Add("Game Info");
-            tabControl.TabPages.Add("Rooms");
-            tabControl.TabPages.Add("NPCs");
-            tabControl.TabPages.Add("Items");
-            tabControl.TabPages.Add("Quests");
-            splitContainer.Panel2.Controls.Add(tabControl);
+            _tabControl.TabPages.Add("Game Info");
+            _tabControl.TabPages.Add("Rooms");
+            _tabControl.TabPages.Add("NPCs");
+            _tabControl.TabPages.Add("Items");
+            _tabControl.TabPages.Add("Quests");
+            splitContainer.Panel2.Controls.Add(_tabControl);
 
             // Add controls to form in correct order
             this.Controls.Add(splitContainer);
@@ -136,12 +157,97 @@ namespace RPGGameEditor
                     var json = File.ReadAllText(dialog.FileName);
                     _currentGame = JsonSerializer.Deserialize<GameDefinition>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                     _currentGamePath = Path.GetDirectoryName(dialog.FileName);
+
+                    // Load rooms, NPCs, items, quests from subdirectories
+                    LoadGameContent();
+
                     MessageBox.Show("Game loaded successfully!");
                     UpdateUI();
                 }
                 catch (Exception ex)
                 {
                     MessageBox.Show($"Error loading game: {ex.Message}");
+                }
+            }
+        }
+
+        private void LoadGameContent()
+        {
+            _rooms.Clear();
+            _npcs.Clear();
+            _items.Clear();
+            _quests.Clear();
+
+            if (string.IsNullOrEmpty(_currentGamePath))
+                return;
+
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+
+            // Load rooms
+            var roomsPath = Path.Combine(_currentGamePath, "rooms");
+            if (Directory.Exists(roomsPath))
+            {
+                foreach (var file in Directory.GetFiles(roomsPath, "*.json"))
+                {
+                    try
+                    {
+                        var roomJson = File.ReadAllText(file);
+                        var room = JsonSerializer.Deserialize<RoomDefinition>(roomJson, options);
+                        if (room != null)
+                            _rooms.Add(room);
+                    }
+                    catch { /* Skip invalid files */ }
+                }
+            }
+
+            // Load NPCs
+            var npcsPath = Path.Combine(_currentGamePath, "npcs");
+            if (Directory.Exists(npcsPath))
+            {
+                foreach (var file in Directory.GetFiles(npcsPath, "*.json"))
+                {
+                    try
+                    {
+                        var npcJson = File.ReadAllText(file);
+                        var npc = JsonSerializer.Deserialize<NpcDefinition>(npcJson, options);
+                        if (npc != null)
+                            _npcs.Add(npc);
+                    }
+                    catch { /* Skip invalid files */ }
+                }
+            }
+
+            // Load items
+            var itemsPath = Path.Combine(_currentGamePath, "items");
+            if (Directory.Exists(itemsPath))
+            {
+                foreach (var file in Directory.GetFiles(itemsPath, "*.json"))
+                {
+                    try
+                    {
+                        var itemJson = File.ReadAllText(file);
+                        var item = JsonSerializer.Deserialize<ItemDefinition>(itemJson, options);
+                        if (item != null)
+                            _items.Add(item);
+                    }
+                    catch { /* Skip invalid files */ }
+                }
+            }
+
+            // Load quests
+            var questsPath = Path.Combine(_currentGamePath, "quests");
+            if (Directory.Exists(questsPath))
+            {
+                foreach (var file in Directory.GetFiles(questsPath, "*.json"))
+                {
+                    try
+                    {
+                        var questJson = File.ReadAllText(file);
+                        var quest = JsonSerializer.Deserialize<QuestDefinition>(questJson, options);
+                        if (quest != null)
+                            _quests.Add(quest);
+                    }
+                    catch { /* Skip invalid files */ }
                 }
             }
         }
@@ -209,8 +315,139 @@ namespace RPGGameEditor
 
         private void UpdateUI()
         {
-            // TODO: Update UI elements to reflect current game state
             this.Text = $"RPG Game Editor - {_currentGame?.Title ?? "No Game Loaded"}";
+
+            if (_currentGame == null)
+            {
+                _treeView.Nodes.Clear();
+                return;
+            }
+
+            // Populate TreeView with game structure
+            _treeView.Nodes.Clear();
+
+            // Game Info node
+            var gameNode = _treeView.Nodes.Add("game", $"Game: {_currentGame.Title}");
+
+            // Rooms node
+            var roomsNode = gameNode.Nodes.Add("rooms", $"Rooms ({_rooms.Count})");
+            foreach (var room in _rooms)
+            {
+                var roomNode = roomsNode.Nodes.Add($"room_{room.Id}", $"{room.Name} ({room.Id})");
+                roomNode.Tag = room;
+            }
+
+            // NPCs node
+            var npcsNode = gameNode.Nodes.Add("npcs", $"NPCs ({_npcs.Count})");
+            foreach (var npc in _npcs)
+            {
+                var npcNode = npcsNode.Nodes.Add($"npc_{npc.Id}", $"{npc.Name} ({npc.Id})");
+                npcNode.Tag = npc;
+            }
+
+            // Items node
+            var itemsNode = gameNode.Nodes.Add("items", $"Items ({_items.Count})");
+            foreach (var item in _items)
+            {
+                var itemNode = itemsNode.Nodes.Add($"item_{item.Id}", $"{item.Name} ({item.Id})");
+                itemNode.Tag = item;
+            }
+
+            // Quests node
+            var questsNode = gameNode.Nodes.Add("quests", $"Quests ({_quests.Count})");
+            foreach (var quest in _quests)
+            {
+                var questNode = questsNode.Nodes.Add($"quest_{quest.Id}", $"{quest.Title} ({quest.Id})");
+                questNode.Tag = quest;
+            }
+
+            gameNode.Expand();
+        }
+
+        private void AddRoom()
+        {
+            if (_currentGame == null)
+            {
+                MessageBox.Show("Please load or create a game first.");
+                return;
+            }
+
+            var dialog = new RoomEditorDialog();
+            if (dialog.ShowDialog() == DialogResult.OK)
+            {
+                _rooms.Add(dialog.CreatedRoom);
+                UpdateUI();
+            }
+        }
+
+        private void AddNPC()
+        {
+            if (_currentGame == null)
+            {
+                MessageBox.Show("Please load or create a game first.");
+                return;
+            }
+
+            var dialog = new NpcEditorDialog();
+            if (dialog.ShowDialog() == DialogResult.OK)
+            {
+                _npcs.Add(dialog.CreatedNpc);
+                UpdateUI();
+            }
+        }
+
+        private void AddItem()
+        {
+            if (_currentGame == null)
+            {
+                MessageBox.Show("Please load or create a game first.");
+                return;
+            }
+
+            var dialog = new ItemEditorDialog();
+            if (dialog.ShowDialog() == DialogResult.OK)
+            {
+                _items.Add(dialog.CreatedItem);
+                UpdateUI();
+            }
+        }
+
+        private void EditSelected()
+        {
+            if (_treeView.SelectedNode == null || _treeView.SelectedNode.Tag == null)
+            {
+                MessageBox.Show("Please select an item to edit.");
+                return;
+            }
+
+            MessageBox.Show("Edit functionality not yet implemented.");
+        }
+
+        private void DeleteSelected()
+        {
+            if (_treeView.SelectedNode == null || _treeView.SelectedNode.Tag == null)
+            {
+                MessageBox.Show("Please select an item to delete.");
+                return;
+            }
+
+            var result = MessageBox.Show("Are you sure you want to delete this item?",
+                "Confirm Delete", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+
+            if (result == DialogResult.Yes)
+            {
+                var tag = _treeView.SelectedNode.Tag;
+                if (tag is RoomDefinition room)
+                    _rooms.Remove(room);
+                else if (tag is NpcDefinition npc)
+                    _npcs.Remove(npc);
+                else if (tag is ItemDefinition item)
+                    _items.Remove(item);
+                else if (tag is QuestDefinition quest)
+                    _quests.Remove(quest);
+
+                UpdateUI();
+            }
         }
     }
 
