@@ -245,11 +245,54 @@ namespace RPGGameEditor
 
             try
             {
-                var gameJsonPath = Path.Combine(_currentGamePath, "game.json");
                 var options = new JsonSerializerOptions { WriteIndented = true };
-                var json = JsonSerializer.Serialize(_currentGame, options);
-                File.WriteAllText(gameJsonPath, json);
-                MessageBox.Show("Game saved successfully!");
+
+                // Save game.json
+                var gameJsonPath = Path.Combine(_currentGamePath, "game.json");
+                var gameJson = JsonSerializer.Serialize(_currentGame, options);
+                File.WriteAllText(gameJsonPath, gameJson);
+
+                // Save rooms to rooms/ subdirectory
+                var roomsPath = Path.Combine(_currentGamePath, "rooms");
+                Directory.CreateDirectory(roomsPath);
+                foreach (var room in _rooms)
+                {
+                    var roomFilePath = Path.Combine(roomsPath, $"{room.Id}.json");
+                    var roomJson = JsonSerializer.Serialize(room, options);
+                    File.WriteAllText(roomFilePath, roomJson);
+                }
+
+                // Save NPCs to npcs/ subdirectory
+                var npcsPath = Path.Combine(_currentGamePath, "npcs");
+                Directory.CreateDirectory(npcsPath);
+                foreach (var npc in _npcs)
+                {
+                    var npcFilePath = Path.Combine(npcsPath, $"{npc.Id}.json");
+                    var npcJson = JsonSerializer.Serialize(npc, options);
+                    File.WriteAllText(npcFilePath, npcJson);
+                }
+
+                // Save items to items/ subdirectory
+                var itemsPath = Path.Combine(_currentGamePath, "items");
+                Directory.CreateDirectory(itemsPath);
+                foreach (var item in _items)
+                {
+                    var itemFilePath = Path.Combine(itemsPath, $"{item.Id}.json");
+                    var itemJson = JsonSerializer.Serialize(item, options);
+                    File.WriteAllText(itemFilePath, itemJson);
+                }
+
+                // Save quests to quests/ subdirectory
+                var questsPath = Path.Combine(_currentGamePath, "quests");
+                Directory.CreateDirectory(questsPath);
+                foreach (var quest in _quests)
+                {
+                    var questFilePath = Path.Combine(questsPath, $"{quest.Id}.json");
+                    var questJson = JsonSerializer.Serialize(quest, options);
+                    File.WriteAllText(questFilePath, questJson);
+                }
+
+                MessageBox.Show($"Game saved successfully!\n\nSaved:\n- Game definition\n- {_rooms.Count} rooms\n- {_npcs.Count} NPCs\n- {_items.Count} items\n- {_quests.Count} quests");
             }
             catch (Exception ex)
             {
@@ -282,7 +325,7 @@ namespace RPGGameEditor
                 return;
             }
 
-            var propsDialog = new GamePropertiesDialog(_currentGame);
+            var propsDialog = new GamePropertiesDialog(_currentGame, _items);
             if (propsDialog.ShowDialog() == DialogResult.OK)
             {
                 MessageBox.Show("Game properties updated!");
@@ -349,7 +392,7 @@ namespace RPGGameEditor
                 return;
             }
 
-            var dialog = new RoomEditorDialog();
+            var dialog = new RoomEditorDialog(null, _rooms);
             if (dialog.ShowDialog() == DialogResult.OK)
             {
                 _rooms.Add(dialog.CreatedRoom);
@@ -365,7 +408,7 @@ namespace RPGGameEditor
                 return;
             }
 
-            var dialog = new NpcEditorDialog();
+            var dialog = new NpcEditorDialog(null, _rooms, _items);
             if (dialog.ShowDialog() == DialogResult.OK)
             {
                 _npcs.Add(dialog.CreatedNpc);
@@ -398,7 +441,7 @@ namespace RPGGameEditor
 
             if (tag is RoomDefinition room)
             {
-                var dialog = new RoomEditorDialog(room);
+                var dialog = new RoomEditorDialog(room, _rooms);
                 if (dialog.ShowDialog() == DialogResult.OK)
                 {
                     var index = _rooms.IndexOf(room);
@@ -409,7 +452,7 @@ namespace RPGGameEditor
             }
             else if (tag is NpcDefinition npc)
             {
-                var dialog = new NpcEditorDialog(npc);
+                var dialog = new NpcEditorDialog(npc, _rooms, _items);
                 if (dialog.ShowDialog() == DialogResult.OK)
                 {
                     var index = _npcs.IndexOf(npc);
@@ -576,25 +619,28 @@ namespace RPGGameEditor
     public class GamePropertiesDialog : Form
     {
         private GameDefinition _game;
+        private List<ItemDefinition> _allItems;
 
-        public GamePropertiesDialog(GameDefinition game)
+        public GamePropertiesDialog(GameDefinition game, List<ItemDefinition> allItems = null)
         {
             _game = game;
+            _allItems = allItems ?? new List<ItemDefinition>();
             InitializeDialog();
         }
 
         private void InitializeDialog()
         {
             this.Text = "Game Properties";
-            this.Size = new System.Drawing.Size(500, 400);
+            this.Size = new System.Drawing.Size(600, 750);
             this.StartPosition = FormStartPosition.CenterParent;
 
             var panel = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 2,
-                RowCount = 8,
-                Padding = new Padding(10)
+                RowCount = 12,
+                Padding = new Padding(10),
+                AutoScroll = true
             };
 
             panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30));
@@ -612,7 +658,7 @@ namespace RPGGameEditor
 
             // Description
             panel.Controls.Add(new Label { Text = "Description:", TextAlign = System.Drawing.ContentAlignment.TopLeft }, 0, 2);
-            var descBox = new TextBox { Text = _game.Description ?? "", Multiline = true, Dock = DockStyle.Fill };
+            var descBox = new TextBox { Text = _game.Description ?? "", Multiline = true, Dock = DockStyle.Fill, Height = 60 };
             panel.Controls.Add(descBox, 1, 2);
 
             // Starting Room
@@ -624,6 +670,44 @@ namespace RPGGameEditor
             panel.Controls.Add(new Label { Text = "Starting Health:", TextAlign = System.Drawing.ContentAlignment.MiddleLeft }, 0, 4);
             var healthBox = new TextBox { Text = (_game.GameSettings?.PlayerStartingHealth ?? 100).ToString(), Dock = DockStyle.Fill };
             panel.Controls.Add(healthBox, 1, 4);
+
+            // Player Name
+            panel.Controls.Add(new Label { Text = "Player Name:", TextAlign = System.Drawing.ContentAlignment.MiddleLeft }, 0, 5);
+            var playerNameBox = new TextBox
+            {
+                Text = _game.Metadata?.Tags?.FirstOrDefault(t => t.StartsWith("player:"))?.Substring(7) ?? "Player",
+                Dock = DockStyle.Fill
+            };
+            panel.Controls.Add(playerNameBox, 1, 5);
+
+            // Style Theme
+            panel.Controls.Add(new Label { Text = "Theme:", TextAlign = System.Drawing.ContentAlignment.MiddleLeft }, 0, 6);
+            var themeBox = new TextBox { Text = _game.Style?.Theme ?? "fantasy", Dock = DockStyle.Fill };
+            panel.Controls.Add(themeBox, 1, 6);
+
+            // Style Tonality
+            panel.Controls.Add(new Label { Text = "Tonality:", TextAlign = System.Drawing.ContentAlignment.MiddleLeft }, 0, 7);
+            var tonalityBox = new TextBox { Text = _game.Style?.Tonality ?? "", Dock = DockStyle.Fill };
+            panel.Controls.Add(tonalityBox, 1, 7);
+
+            // Narrator Voice
+            panel.Controls.Add(new Label { Text = "Narrator Voice:", TextAlign = System.Drawing.ContentAlignment.TopLeft }, 0, 8);
+            var narratorBox = new TextBox { Text = _game.Style?.NarratorVoice ?? "", Multiline = true, Dock = DockStyle.Fill, Height = 60 };
+            panel.Controls.Add(narratorBox, 1, 8);
+
+            // Starting Items
+            panel.Controls.Add(new Label { Text = "Starting Items:", TextAlign = System.Drawing.ContentAlignment.TopLeft }, 0, 9);
+            var startingItemsListBox = new CheckedListBox { Dock = DockStyle.Fill, Height = 120 };
+            foreach (var item in _allItems)
+            {
+                startingItemsListBox.Items.Add($"{item.Name} ({item.Id})");
+                // Check if this item is already in starting items
+                if (_game.StartingItems?.Any(si => si.ItemId == item.Id) == true)
+                {
+                    startingItemsListBox.SetItemChecked(startingItemsListBox.Items.Count - 1, true);
+                }
+            }
+            panel.Controls.Add(startingItemsListBox, 1, 9);
 
             // Buttons
             var buttonPanel = new FlowLayoutPanel
@@ -641,11 +725,41 @@ namespace RPGGameEditor
                 _game.Title = titleBox.Text;
                 _game.Subtitle = subtitleBox.Text;
                 _game.Description = descBox.Text;
+
+                // Game Settings
                 if (_game.GameSettings == null)
                     _game.GameSettings = new GameSettingsDefinition();
                 _game.GameSettings.StartingRoomId = startRoomBox.Text;
                 if (int.TryParse(healthBox.Text, out int health))
                     _game.GameSettings.PlayerStartingHealth = health;
+
+                // Player Name (stored in metadata tags)
+                if (_game.Metadata == null)
+                    _game.Metadata = new MetadataDefinition();
+                _game.Metadata.Tags.RemoveAll(t => t.StartsWith("player:"));
+                if (!string.IsNullOrWhiteSpace(playerNameBox.Text))
+                    _game.Metadata.Tags.Add($"player:{playerNameBox.Text}");
+
+                // Style Settings
+                if (_game.Style == null)
+                    _game.Style = new StyleSettingsDefinition();
+                _game.Style.Theme = themeBox.Text;
+                _game.Style.Tonality = tonalityBox.Text;
+                _game.Style.NarratorVoice = narratorBox.Text;
+
+                // Starting Items
+                _game.StartingItems.Clear();
+                for (int i = 0; i < startingItemsListBox.CheckedItems.Count; i++)
+                {
+                    var checkedIndex = startingItemsListBox.CheckedIndices[i];
+                    var itemId = _allItems[checkedIndex].Id;
+                    _game.StartingItems.Add(new StartingItemDefinition
+                    {
+                        ItemId = itemId,
+                        Quantity = 1
+                    });
+                }
+
                 this.DialogResult = DialogResult.OK;
                 this.Close();
             };
@@ -666,52 +780,111 @@ namespace RPGGameEditor
         private TextBox roomIdTextBox;
         private TextBox roomNameTextBox;
         private TextBox roomDescriptionTextBox;
+        private ListBox exitsListBox;
+        private List<ExitDefinition> _exits = new();
+        private List<RoomDefinition> _allRooms;
 
-        public RoomEditorDialog()
+        public RoomEditorDialog(RoomDefinition room = null, List<RoomDefinition> allRooms = null)
         {
+            _allRooms = allRooms ?? new List<RoomDefinition>();
             InitializeDialog();
-        }
 
-        public RoomEditorDialog(RoomDefinition room)
-        {
-            InitializeDialog();
-            // Pre-fill with existing data
-            roomIdTextBox.Text = room.Id;
-            roomNameTextBox.Text = room.Name;
-            roomDescriptionTextBox.Text = room.Description ?? "";
+            if (room != null)
+            {
+                // Pre-fill with existing data
+                roomIdTextBox.Text = room.Id;
+                roomNameTextBox.Text = room.Name;
+                roomDescriptionTextBox.Text = room.Description ?? "";
+                _exits = room.Exits?.ToList() ?? new List<ExitDefinition>();
+                UpdateExitsList();
+            }
         }
 
         private void InitializeDialog()
         {
             this.Text = "Edit Room";
-            this.Size = new System.Drawing.Size(500, 400);
+            this.Size = new System.Drawing.Size(700, 600);
             this.StartPosition = FormStartPosition.CenterParent;
 
-            var panel = new TableLayoutPanel
+            var mainLayout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 2,
+                Padding = new Padding(10)
+            };
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
+
+            // Top panel - basic room info
+            var topPanel = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 2,
-                RowCount = 4,
+                RowCount = 3,
+                Padding = new Padding(5)
+            };
+            topPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
+            topPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 75));
+
+            // Room ID
+            topPanel.Controls.Add(new Label { Text = "Room ID:", TextAlign = System.Drawing.ContentAlignment.MiddleLeft }, 0, 0);
+            roomIdTextBox = new TextBox { Dock = DockStyle.Fill };
+            topPanel.Controls.Add(roomIdTextBox, 1, 0);
+
+            // Room Name
+            topPanel.Controls.Add(new Label { Text = "Name:", TextAlign = System.Drawing.ContentAlignment.MiddleLeft }, 0, 1);
+            roomNameTextBox = new TextBox { Dock = DockStyle.Fill };
+            topPanel.Controls.Add(roomNameTextBox, 1, 1);
+
+            // Room Description
+            topPanel.Controls.Add(new Label { Text = "Description:", TextAlign = System.Drawing.ContentAlignment.TopLeft }, 0, 2);
+            roomDescriptionTextBox = new TextBox { Multiline = true, Dock = DockStyle.Fill };
+            topPanel.Controls.Add(roomDescriptionTextBox, 1, 2);
+
+            // Bottom panel - exits management
+            var bottomPanel = new GroupBox
+            {
+                Text = "Exits",
+                Dock = DockStyle.Fill,
                 Padding = new Padding(10)
             };
 
-            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30));
-            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 70));
+            var exitsLayout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 2,
+                RowCount = 1
+            };
+            exitsLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 70));
+            exitsLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30));
 
-            // Room ID
-            panel.Controls.Add(new Label { Text = "Room ID:", TextAlign = System.Drawing.ContentAlignment.MiddleLeft }, 0, 0);
-            roomIdTextBox = new TextBox { Dock = DockStyle.Fill };
-            panel.Controls.Add(roomIdTextBox, 1, 0);
+            exitsListBox = new ListBox { Dock = DockStyle.Fill };
 
-            // Room Name
-            panel.Controls.Add(new Label { Text = "Name:", TextAlign = System.Drawing.ContentAlignment.MiddleLeft }, 0, 1);
-            roomNameTextBox = new TextBox { Dock = DockStyle.Fill };
-            panel.Controls.Add(roomNameTextBox, 1, 1);
+            var exitsButtonPanel = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.TopDown,
+                Padding = new Padding(5)
+            };
 
-            // Room Description
-            panel.Controls.Add(new Label { Text = "Description:", TextAlign = System.Drawing.ContentAlignment.TopLeft }, 0, 2);
-            roomDescriptionTextBox = new TextBox { Multiline = true, Dock = DockStyle.Fill, Height = 100 };
-            panel.Controls.Add(roomDescriptionTextBox, 1, 2);
+            var addExitBtn = new Button { Text = "Add Exit", Width = 100 };
+            addExitBtn.Click += AddExit_Click;
+            var editExitBtn = new Button { Text = "Edit Exit", Width = 100 };
+            editExitBtn.Click += EditExit_Click;
+            var deleteExitBtn = new Button { Text = "Delete Exit", Width = 100 };
+            deleteExitBtn.Click += DeleteExit_Click;
+
+            exitsButtonPanel.Controls.Add(addExitBtn);
+            exitsButtonPanel.Controls.Add(editExitBtn);
+            exitsButtonPanel.Controls.Add(deleteExitBtn);
+
+            exitsLayout.Controls.Add(exitsListBox, 0, 0);
+            exitsLayout.Controls.Add(exitsButtonPanel, 1, 0);
+            bottomPanel.Controls.Add(exitsLayout);
+
+            mainLayout.Controls.Add(topPanel, 0, 0);
+            mainLayout.Controls.Add(bottomPanel, 0, 1);
 
             // Buttons
             var buttonPanel = new FlowLayoutPanel
@@ -740,7 +913,159 @@ namespace RPGGameEditor
                     Description = roomDescriptionTextBox.Text,
                     NPCs = new List<RoomNpcDefinition>(),
                     Items = new List<RoomItemDefinition>(),
-                    Exits = new List<ExitDefinition>()
+                    Exits = _exits
+                };
+
+                this.DialogResult = DialogResult.OK;
+                this.Close();
+            };
+
+            buttonPanel.Controls.Add(cancelBtn);
+            buttonPanel.Controls.Add(okBtn);
+
+            this.Controls.Add(mainLayout);
+            this.Controls.Add(buttonPanel);
+            this.CancelButton = cancelBtn;
+            this.AcceptButton = okBtn;
+        }
+
+        private void AddExit_Click(object sender, EventArgs e)
+        {
+            var dialog = new ExitEditorDialog(_allRooms);
+            if (dialog.ShowDialog() == DialogResult.OK)
+            {
+                _exits.Add(dialog.CreatedExit);
+                UpdateExitsList();
+            }
+        }
+
+        private void EditExit_Click(object sender, EventArgs e)
+        {
+            if (exitsListBox.SelectedIndex < 0) return;
+
+            var exit = _exits[exitsListBox.SelectedIndex];
+            var dialog = new ExitEditorDialog(_allRooms, exit);
+            if (dialog.ShowDialog() == DialogResult.OK)
+            {
+                _exits[exitsListBox.SelectedIndex] = dialog.CreatedExit;
+                UpdateExitsList();
+            }
+        }
+
+        private void DeleteExit_Click(object sender, EventArgs e)
+        {
+            if (exitsListBox.SelectedIndex < 0) return;
+
+            _exits.RemoveAt(exitsListBox.SelectedIndex);
+            UpdateExitsList();
+        }
+
+        private void UpdateExitsList()
+        {
+            exitsListBox.Items.Clear();
+            foreach (var exit in _exits)
+            {
+                exitsListBox.Items.Add($"{exit.DisplayName} → {exit.DestinationRoomId}");
+            }
+        }
+    }
+
+    public class ExitEditorDialog : Form
+    {
+        public ExitDefinition CreatedExit { get; private set; }
+        private TextBox displayNameTextBox;
+        private ComboBox destinationRoomComboBox;
+        private TextBox descriptionTextBox;
+        private List<RoomDefinition> _allRooms;
+
+        public ExitEditorDialog(List<RoomDefinition> allRooms, ExitDefinition exit = null)
+        {
+            _allRooms = allRooms ?? new List<RoomDefinition>();
+            InitializeDialog();
+
+            if (exit != null)
+            {
+                displayNameTextBox.Text = exit.DisplayName;
+                destinationRoomComboBox.Text = exit.DestinationRoomId;
+                descriptionTextBox.Text = exit.Description ?? "";
+            }
+        }
+
+        private void InitializeDialog()
+        {
+            this.Text = "Edit Exit";
+            this.Size = new System.Drawing.Size(500, 350);
+            this.StartPosition = FormStartPosition.CenterParent;
+
+            var panel = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 2,
+                RowCount = 3,
+                Padding = new Padding(10)
+            };
+
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30));
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 70));
+
+            // Display Name (what player sees)
+            panel.Controls.Add(new Label { Text = "Exit Name:", TextAlign = System.Drawing.ContentAlignment.MiddleLeft }, 0, 0);
+            displayNameTextBox = new TextBox { Dock = DockStyle.Fill };
+            panel.Controls.Add(displayNameTextBox, 1, 0);
+
+            // Destination Room (dropdown)
+            panel.Controls.Add(new Label { Text = "Destination:", TextAlign = System.Drawing.ContentAlignment.MiddleLeft }, 0, 1);
+            destinationRoomComboBox = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDown };
+            foreach (var room in _allRooms)
+            {
+                destinationRoomComboBox.Items.Add($"{room.Id} - {room.Name}");
+            }
+            panel.Controls.Add(destinationRoomComboBox, 1, 1);
+
+            // Description
+            panel.Controls.Add(new Label { Text = "Description:", TextAlign = System.Drawing.ContentAlignment.TopLeft }, 0, 2);
+            descriptionTextBox = new TextBox { Multiline = true, Dock = DockStyle.Fill, Height = 100 };
+            panel.Controls.Add(descriptionTextBox, 1, 2);
+
+            // Buttons
+            var buttonPanel = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Bottom,
+                Height = 40,
+                FlowDirection = FlowDirection.RightToLeft,
+                Padding = new Padding(10)
+            };
+
+            var cancelBtn = new Button { Text = "Cancel", Width = 80, DialogResult = DialogResult.Cancel };
+            var okBtn = new Button { Text = "OK", Width = 80 };
+            okBtn.Click += (s, e) =>
+            {
+                if (string.IsNullOrWhiteSpace(displayNameTextBox.Text))
+                {
+                    MessageBox.Show("Please enter an exit name.");
+                    this.DialogResult = DialogResult.None;
+                    return;
+                }
+
+                // Extract room ID from combo box selection (format: "room_id - Room Name")
+                var destinationText = destinationRoomComboBox.Text;
+                var destinationRoomId = destinationText.Contains(" - ")
+                    ? destinationText.Substring(0, destinationText.IndexOf(" - "))
+                    : destinationText;
+
+                if (string.IsNullOrWhiteSpace(destinationRoomId))
+                {
+                    MessageBox.Show("Please select or enter a destination room.");
+                    this.DialogResult = DialogResult.None;
+                    return;
+                }
+
+                CreatedExit = new ExitDefinition
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    DisplayName = displayNameTextBox.Text,
+                    DestinationRoomId = destinationRoomId,
+                    Description = descriptionTextBox.Text
                 };
 
                 this.DialogResult = DialogResult.OK;
@@ -768,37 +1093,61 @@ namespace RPGGameEditor
         private TextBox strengthTextBox;
         private TextBox agilityTextBox;
         private TextBox armorTextBox;
+        private ComboBox startingRoomComboBox;
+        private CheckedListBox startingItemsListBox;
+        private List<RoomDefinition> _allRooms;
+        private List<ItemDefinition> _allItems;
 
-        public NpcEditorDialog()
+        public NpcEditorDialog(NpcDefinition npc = null, List<RoomDefinition> allRooms = null, List<ItemDefinition> allItems = null)
         {
+            _allRooms = allRooms ?? new List<RoomDefinition>();
+            _allItems = allItems ?? new List<ItemDefinition>();
             InitializeDialog();
-        }
 
-        public NpcEditorDialog(NpcDefinition npc)
-        {
-            InitializeDialog();
-            // Pre-fill with existing data
-            npcIdTextBox.Text = npc.Id;
-            npcNameTextBox.Text = npc.Name;
-            npcTitleTextBox.Text = npc.Title ?? "";
-            npcDescriptionTextBox.Text = npc.Description ?? "";
-            healthTextBox.Text = npc.Stats?.Health.ToString() ?? "60";
-            strengthTextBox.Text = npc.Stats?.Strength.ToString() ?? "10";
-            agilityTextBox.Text = npc.Stats?.Agility.ToString() ?? "10";
-            armorTextBox.Text = npc.Stats?.Armor.ToString() ?? "0";
+            if (npc != null)
+            {
+                // Pre-fill with existing data
+                npcIdTextBox.Text = npc.Id;
+                npcNameTextBox.Text = npc.Name;
+                npcTitleTextBox.Text = npc.Title ?? "";
+                npcDescriptionTextBox.Text = npc.Description ?? "";
+                healthTextBox.Text = npc.Stats?.Health.ToString() ?? "60";
+                strengthTextBox.Text = npc.Stats?.Strength.ToString() ?? "10";
+                agilityTextBox.Text = npc.Stats?.Agility.ToString() ?? "10";
+                armorTextBox.Text = npc.Stats?.Armor.ToString() ?? "0";
+
+                // Set starting room
+                if (npc.Location != null && !string.IsNullOrEmpty(npc.Location.CurrentRoomId))
+                {
+                    startingRoomComboBox.Text = npc.Location.CurrentRoomId;
+                }
+
+                // Set starting items
+                if (npc.Inventory != null)
+                {
+                    for (int i = 0; i < startingItemsListBox.Items.Count; i++)
+                    {
+                        var itemId = _allItems[i].Id;
+                        if (npc.Inventory.Any(inv => inv.ItemId == itemId))
+                        {
+                            startingItemsListBox.SetItemChecked(i, true);
+                        }
+                    }
+                }
+            }
         }
 
         private void InitializeDialog()
         {
             this.Text = "Edit NPC";
-            this.Size = new System.Drawing.Size(600, 550);
+            this.Size = new System.Drawing.Size(650, 700);
             this.StartPosition = FormStartPosition.CenterParent;
 
             var panel = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 2,
-                RowCount = 9,
+                RowCount = 11,
                 Padding = new Padding(10)
             };
 
@@ -822,7 +1171,7 @@ namespace RPGGameEditor
 
             // NPC Description
             panel.Controls.Add(new Label { Text = "Description:", TextAlign = System.Drawing.ContentAlignment.TopLeft }, 0, 3);
-            npcDescriptionTextBox = new TextBox { Multiline = true, Dock = DockStyle.Fill, Height = 80 };
+            npcDescriptionTextBox = new TextBox { Multiline = true, Dock = DockStyle.Fill, Height = 60 };
             panel.Controls.Add(npcDescriptionTextBox, 1, 3);
 
             // Health
@@ -835,7 +1184,7 @@ namespace RPGGameEditor
             strengthTextBox = new TextBox { Text = "10", Dock = DockStyle.Fill };
             panel.Controls.Add(strengthTextBox, 1, 5);
 
-            // Agility (for fleeing)
+            // Agility
             panel.Controls.Add(new Label { Text = "Agility:", TextAlign = System.Drawing.ContentAlignment.MiddleLeft }, 0, 6);
             agilityTextBox = new TextBox { Text = "10", Dock = DockStyle.Fill };
             panel.Controls.Add(agilityTextBox, 1, 6);
@@ -844,6 +1193,24 @@ namespace RPGGameEditor
             panel.Controls.Add(new Label { Text = "Armor:", TextAlign = System.Drawing.ContentAlignment.MiddleLeft }, 0, 7);
             armorTextBox = new TextBox { Text = "0", Dock = DockStyle.Fill };
             panel.Controls.Add(armorTextBox, 1, 7);
+
+            // Starting Room
+            panel.Controls.Add(new Label { Text = "Starting Room:", TextAlign = System.Drawing.ContentAlignment.MiddleLeft }, 0, 8);
+            startingRoomComboBox = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDown };
+            foreach (var room in _allRooms)
+            {
+                startingRoomComboBox.Items.Add($"{room.Id} - {room.Name}");
+            }
+            panel.Controls.Add(startingRoomComboBox, 1, 8);
+
+            // Starting Items
+            panel.Controls.Add(new Label { Text = "Starting Items:", TextAlign = System.Drawing.ContentAlignment.TopLeft }, 0, 9);
+            startingItemsListBox = new CheckedListBox { Dock = DockStyle.Fill, Height = 120 };
+            foreach (var item in _allItems)
+            {
+                startingItemsListBox.Items.Add($"{item.Name} ({item.Id})");
+            }
+            panel.Controls.Add(startingItemsListBox, 1, 9);
 
             // Buttons
             var buttonPanel = new FlowLayoutPanel
@@ -876,6 +1243,26 @@ namespace RPGGameEditor
                     return;
                 }
 
+                // Extract starting room ID
+                var startingRoomText = startingRoomComboBox.Text;
+                var startingRoomId = startingRoomText.Contains(" - ")
+                    ? startingRoomText.Substring(0, startingRoomText.IndexOf(" - "))
+                    : startingRoomText;
+
+                // Build inventory from checked items
+                var inventory = new List<InventoryItemDefinition>();
+                for (int i = 0; i < startingItemsListBox.CheckedItems.Count; i++)
+                {
+                    var checkedIndex = startingItemsListBox.CheckedIndices[i];
+                    var itemId = _allItems[checkedIndex].Id;
+                    inventory.Add(new InventoryItemDefinition
+                    {
+                        ItemId = itemId,
+                        Quantity = 1,
+                        Loot = true
+                    });
+                }
+
                 CreatedNpc = new NpcDefinition
                 {
                     Id = npcIdTextBox.Text,
@@ -891,7 +1278,13 @@ namespace RPGGameEditor
                         Agility = agility,
                         Armor = armor
                     },
-                    Inventory = new List<InventoryItemDefinition>()
+                    Location = new LocationDefinition
+                    {
+                        CurrentRoomId = startingRoomId,
+                        HomeRoomId = startingRoomId,
+                        CanMove = true
+                    },
+                    Inventory = inventory
                 };
 
                 this.DialogResult = DialogResult.OK;

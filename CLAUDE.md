@@ -31,18 +31,41 @@ dotnet run replay
 ```
 Automatically plays both games using randomized player actions, generates markdown logs for verification and testing.
 
-### Run WinForms Room Designer/Editor
+### Run WinForms Game Editor
 ```bash
 dotnet run --project RPGGameEditor/RPGGameEditor.csproj
 ```
-Launches a visual Windows Forms application for creating and editing game worlds without writing code. Allows you to:
-- Create, edit, and delete rooms
-- Add and manage exits between rooms
-- Assign NPCs to rooms
-- Edit room metadata and properties
-- Save/load world data as JSON files
+Launches a visual Windows Forms application for creating and editing complete game worlds without writing code. Features:
 
-For detailed usage instructions, see `ROOM_DESIGNER_QUICKSTART.md`.
+**Room Management:**
+- Create, edit, and delete rooms with ID, name, and description
+- Add/edit/delete exits with display names and destination room selection
+- Visual exit list showing connections between rooms
+
+**NPC Management:**
+- Create NPCs with stats (Health, Strength, Agility, Armor)
+- Assign starting room via dropdown (sets CurrentRoomId and HomeRoomId)
+- Select starting items from checklist (NPCs can carry loot)
+
+**Item Management:**
+- Create items with ID, name, description, and type
+- Set damage bonus (for weapons) and armor bonus (for armor)
+
+**Game Properties:**
+- Set game title, subtitle, and description
+- Configure starting room and player starting health
+- Set player name (stored in metadata tags)
+- Define style settings: theme, tonality, narrator voice (for LLM)
+- Select starting items for player from checklist
+
+**Save/Load:**
+- Saves game structure to subdirectories:
+  - `game.json` - Game metadata and settings
+  - `rooms/*.json` - Individual room files with exits
+  - `npcs/*.json` - NPC definitions with location and inventory
+  - `items/*.json` - Item definitions
+  - `quests/*.json` - Quest definitions
+- Load existing games to edit and iterate
 
 ### Project Structure
 - **Program.cs** - Entry point with interactive and replay modes
@@ -159,15 +182,59 @@ All LLM calls use structured ChatMessage objects with Role/Content pairs. Ollama
 
 ## Development Guidelines
 
-### Using the Room Designer/Editor
-The WinForms Room Designer (`RPGGameEditor`) provides a visual interface for world building:
-1. Launch: `dotnet run --project RPGGameEditor/RPGGameEditor.csproj`
-2. Create rooms, exits, and assign NPCs without coding
-3. Save world data as JSON files (e.g., `world_data.json`)
-4. Load these files back into the editor for iteration
-5. Use JSON files as templates for programmatic game definitions
+### Using the Game Editor
+The WinForms Game Editor (`RPGGameEditor`) provides a complete visual interface for game creation:
 
-See `ROOM_DESIGNER_QUICKSTART.md` for complete usage guide.
+**Workflow:**
+1. Launch: `dotnet run --project RPGGameEditor/RPGGameEditor.csproj`
+2. Create new game or open existing `game.json`
+3. Add rooms and define exits between them
+4. Create NPCs and assign to starting rooms
+5. Create items and assign to NPCs or as starting items
+6. Configure game properties (style, player settings, starting items)
+7. Save - writes all content to subdirectories for version control
+
+**Exit Management:**
+- Each room displays a list of exits
+- Add/Edit/Delete exits with dedicated dialog
+- Exit properties: Display Name (what player sees), Destination Room (dropdown), Description
+- Example: "north door" → "tavern_upstairs"
+
+**NPC Configuration:**
+- Starting Room dropdown populated from existing rooms
+- Starting Items checklist allows NPCs to carry loot
+- All items marked as lootable when NPC is defeated
+- Location.CurrentRoomId and Location.HomeRoomId set automatically
+
+**Game Properties Dialog:**
+- **Player Name**: Stored as metadata tag (`player:PlayerName`)
+- **Style Settings**: Theme, Tonality, Narrator Voice for LLM behavior
+- **Starting Items**: Checklist of items player begins with
+- **Starting Room**: Where game begins (must exist in rooms/)
+- **Starting Health**: Player's initial HP
+
+**File Structure:**
+```
+games/
+  my-game/
+    game.json          # Game metadata, settings, style
+    rooms/
+      tavern.json      # Room with exits list
+      forest.json
+    npcs/
+      bartender.json   # NPC with location and inventory
+      guard.json
+    items/
+      sword.json       # Item definitions
+      potion.json
+    quests/
+      main_quest.json
+```
+
+This structure enables:
+- Version control friendly (one file per entity)
+- Easy collaboration (edit different rooms simultaneously)
+- Direct use by game loader (no conversion needed)
 
 ### Adding New Game Actions
 1. Create handler method in GameMaster: `private ActionResult Handle[Action](...)`
