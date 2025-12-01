@@ -48,6 +48,11 @@ public class Character
     /// </summary>
     public Dictionary<string, InventoryItem> CarriedItems { get; set; } = new();
 
+    /// <summary>
+    /// The character's wallet containing currency.
+    /// </summary>
+    public Wallet Wallet { get; set; } = new();
+
     // NPC Location and Movement
     public string? CurrentRoomId { get; set; }             // Where NPC is currently located
     public string? HomeRoomId { get; set; }                // Where NPC normally stays
@@ -63,6 +68,34 @@ public class Character
     public string? Backstory { get; set; }                // NPC's history
     public List<string>? Relationships { get; set; }      // Other NPC IDs they interact with
     public Dictionary<string, int> Reputation { get; set; } = new(); // Reputation with factions
+
+    // Crafting capabilities
+    /// <summary>
+    /// Whether this NPC can craft items.
+    /// </summary>
+    public bool CanCraft { get; set; } = false;
+
+    /// <summary>
+    /// Recipe IDs this NPC knows how to craft.
+    /// </summary>
+    public List<string> KnownRecipes { get; set; } = new();
+
+    /// <summary>
+    /// Crafting specialty (e.g., "blacksmith", "alchemy", "tailoring").
+    /// NPCs can craft any recipe matching their specialty.
+    /// </summary>
+    public string? CraftingSpecialty { get; set; }
+
+    // Quest giving
+    /// <summary>
+    /// Quest IDs this NPC can offer.
+    /// </summary>
+    public List<string> OfferedQuests { get; set; } = new();
+
+    /// <summary>
+    /// Whether this NPC can dynamically generate jobs/quests.
+    /// </summary>
+    public bool CanOfferJobs { get; set; } = false;
 
     public bool IsAlive => Health > 0;
     public bool IsPlayer { get; set; } = false;

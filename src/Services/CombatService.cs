@@ -40,8 +40,9 @@ public class CombatService
             return result;
         }
 
-        // Calculate base damage from attacker
-        int baseDamage = attacker.GetTotalDamage(null); // No weapon bonus for now (simplified)
+        // Calculate base damage from attacker (including equipped weapon)
+        Item? equippedWeapon = GetEquippedWeapon(attacker);
+        int baseDamage = attacker.GetTotalDamage(equippedWeapon);
 
         // Check for critical hit
         bool isCritical = RollForCritical(attacker);
@@ -51,8 +52,8 @@ public class CombatService
             result.WasCritical = true;
         }
 
-        // Apply armor reduction - use defender's armor stat directly
-        int defenderArmorRating = defender.Armor;
+        // Apply armor reduction - use defender's armor stat plus equipped armor
+        int defenderArmorRating = GetTotalArmor(defender);
         int armorReduction = CalculateArmorReduction(defenderArmorRating);
         int finalDamage = Math.Max(1, baseDamage - armorReduction); // Minimum 1 damage gets through
 
@@ -110,20 +111,24 @@ public class CombatService
 
     /// <summary>
     /// Get the equipped weapon for a character, if any.
+    /// Looks up the actual item from the character's carried items.
     /// </summary>
     private Item? GetEquippedWeapon(Character character)
     {
-        var mainHandSlot = character.EquipmentSlots.ContainsKey("main_hand") ? character.EquipmentSlots["main_hand"] : null;
-        if (mainHandSlot != null)
-        {
-            return new Item { Id = mainHandSlot, DamageBonus = 5 }; // Simplified - would normally fetch from inventory
-        }
+        // Check if main_hand slot has an item ID equipped
+        if (!character.EquipmentSlots.TryGetValue("main_hand", out var itemId) || itemId == null)
+            return null;
+
+        // Look up the actual Item from the character's carried items
+        if (character.CarriedItems.TryGetValue(itemId, out var inventoryItem))
+            return inventoryItem.Item;
 
         return null;
     }
 
     /// <summary>
     /// Get all equipped armor items for a character.
+    /// Looks up actual items from the character's carried items.
     /// </summary>
     private Dictionary<string, Item> GetEquippedArmorItems(Character character)
     {
@@ -132,15 +137,35 @@ public class CombatService
 
         foreach (var slot in armorSlots)
         {
-            if (character.EquipmentSlots.ContainsKey(slot) && character.EquipmentSlots[slot] != null)
+            if (character.EquipmentSlots.TryGetValue(slot, out var itemId) && itemId != null)
             {
-                var itemId = character.EquipmentSlots[slot];
-                // In a real implementation, would fetch item details from a repository
-                // For now, we use the Character's Armor stat directly
+                // Look up the actual Item from carried items
+                if (character.CarriedItems.TryGetValue(itemId, out var inventoryItem))
+                {
+                    armorItems[slot] = inventoryItem.Item;
+                }
             }
         }
 
         return armorItems;
+    }
+
+    /// <summary>
+    /// Calculate total armor rating including base armor stat and equipped armor pieces.
+    /// </summary>
+    private int GetTotalArmor(Character character)
+    {
+        int totalArmor = character.Armor; // Base armor stat
+
+        // Add armor bonuses from equipped items
+        var equippedArmor = GetEquippedArmorItems(character);
+        foreach (var item in equippedArmor.Values)
+        {
+            if (item.IsEquippable && item.ArmorBonus > 0)
+                totalArmor += item.ArmorBonus;
+        }
+
+        return totalArmor;
     }
 
     /// <summary>
@@ -244,7 +269,8 @@ public class CombatService
                 continue;
 
             // Each companion contributes 20% of their damage output as bonus
-            int companionDamage = companion.GetTotalDamage(null);
+            Item? companionWeapon = GetEquippedWeapon(companion);
+            int companionDamage = companion.GetTotalDamage(companionWeapon);
             int contribution = (int)(companionDamage * 0.2);
             totalBonus += contribution;
 

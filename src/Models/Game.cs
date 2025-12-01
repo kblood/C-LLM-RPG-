@@ -43,6 +43,68 @@ public class Game
     public bool HasMagic { get; set; } = false;
     public bool HasTechnology { get; set; } = false;
 
+    // Equipment System
+    /// <summary>
+    /// Defines the equipment slots available in this game.
+    /// If null, will use the default configuration.
+    /// </summary>
+    public EquipmentSlotConfiguration? EquipmentSlots { get; set; }
+
+    /// <summary>
+    /// Gets the equipment slot configuration for this game, using default if not specified.
+    /// </summary>
+    public EquipmentSlotConfiguration GetEquipmentSlots()
+    {
+        return EquipmentSlots ?? EquipmentSlotConfiguration.CreateDefault();
+    }
+
+    // Economy System
+    /// <summary>
+    /// Economy configuration for this game. If null, economy is disabled.
+    /// </summary>
+    public EconomyConfig? Economy { get; set; }
+
+    /// <summary>
+    /// Gets the economy configuration, defaulting to disabled if not set.
+    /// </summary>
+    public EconomyConfig GetEconomy()
+    {
+        return Economy ?? EconomyConfig.Disabled();
+    }
+
+    /// <summary>
+    /// Starting currency for the player (in base units).
+    /// </summary>
+    public long StartingCurrency { get; set; } = 0;
+
+    // Game Master Authority
+    /// <summary>
+    /// Configures what the Game Master can dynamically create or decide.
+    /// </summary>
+    public GameMasterAuthority? Authority { get; set; }
+
+    /// <summary>
+    /// Gets the GM authority, defaulting to Balanced if not set.
+    /// </summary>
+    public GameMasterAuthority GetAuthority()
+    {
+        return Authority ?? GameMasterAuthority.Balanced();
+    }
+
+    // Crafting System
+    /// <summary>
+    /// Crafting configuration for this game.
+    /// </summary>
+    public CraftingConfig? Crafting { get; set; }
+
+    /// <summary>
+    /// Gets the crafting config, defaulting to disabled if not set.
+    /// </summary>
+    public CraftingConfig GetCrafting()
+    {
+        return Crafting ?? CraftingConfig.Disabled();
+    }
+
     // Metadata
     public string? Author { get; set; }
     public DateTime CreatedDate { get; set; } = DateTime.UtcNow;

@@ -32,6 +32,24 @@ public class Room
     public Dictionary<string, object> Metadata { get; set; } = new();
 
     /// <summary>
+    /// Gatherable resources in this location.
+    /// </summary>
+    public RoomResources? Resources { get; set; }
+
+    /// <summary>
+    /// Biome type for this room (for resource generation).
+    /// </summary>
+    public string? Biome
+    {
+        get => Resources?.Biome ?? Metadata.GetValueOrDefault("biome") as string;
+        set
+        {
+            Resources ??= new RoomResources();
+            Resources.Biome = value;
+        }
+    }
+
+    /// <summary>
     /// Get available exits (only those marked as available)
     /// </summary>
     public List<Exit> GetAvailableExits()

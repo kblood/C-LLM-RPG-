@@ -42,6 +42,41 @@ public class ItemBuilder
         return this;
     }
 
+    /// <summary>
+    /// Set detailed pricing with buy/sell multipliers.
+    /// </summary>
+    public ItemBuilder WithPricing(long basePrice, double buyMultiplier = 1.0, double sellMultiplier = 0.5)
+    {
+        _item.Value = (int)basePrice; // Keep legacy value in sync
+        _item.Pricing = new ItemPricing
+        {
+            BasePrice = basePrice,
+            BuyMultiplier = buyMultiplier,
+            SellMultiplier = sellMultiplier
+        };
+        return this;
+    }
+
+    /// <summary>
+    /// Mark item as not buyable (quest rewards, unique loot only).
+    /// </summary>
+    public ItemBuilder NotBuyable()
+    {
+        _item.Pricing ??= new ItemPricing { BasePrice = _item.Value };
+        _item.Pricing.CanBuy = false;
+        return this;
+    }
+
+    /// <summary>
+    /// Mark item as not sellable (quest items, keys, etc).
+    /// </summary>
+    public ItemBuilder NotSellable()
+    {
+        _item.Pricing ??= new ItemPricing { BasePrice = _item.Value };
+        _item.Pricing.CanSell = false;
+        return this;
+    }
+
     public ItemBuilder WithTheme(string theme)
     {
         _item.Theme = theme;
@@ -139,6 +174,61 @@ public class ItemBuilder
     {
         _item.Type = ItemType.QuestItem;
         _item.CanBeTaken = true;
+        return this;
+    }
+
+    /// <summary>
+    /// Make the item a crafting material.
+    /// </summary>
+    public ItemBuilder AsCraftingMaterial(string category, int gatherDifficulty = 50)
+    {
+        _item.Type = ItemType.CraftingMaterial;
+        _item.MaterialCategory = category;
+        _item.GatherDifficulty = gatherDifficulty;
+        _item.Stackable = true;
+        return this;
+    }
+
+    /// <summary>
+    /// Set biomes where this item can be found.
+    /// </summary>
+    public ItemBuilder FoundIn(params string[] biomes)
+    {
+        _item.FoundInBiomes = biomes.ToList();
+        return this;
+    }
+
+    /// <summary>
+    /// Make the item a treasure (valuable for selling only).
+    /// </summary>
+    public ItemBuilder AsTreasure(int value)
+    {
+        _item.Type = ItemType.Treasure;
+        _item.IsTreasure = true;
+        _item.Value = value;
+        _item.Stackable = true;
+        return this;
+    }
+
+    /// <summary>
+    /// Make the item junk (low-value flavor item).
+    /// </summary>
+    public ItemBuilder AsJunk(int value = 1)
+    {
+        _item.Type = ItemType.Junk;
+        _item.IsJunk = true;
+        _item.Value = value;
+        return this;
+    }
+
+    /// <summary>
+    /// Make the item a tool (pickaxe, herbalist kit, etc.).
+    /// </summary>
+    public ItemBuilder AsTool(string? useFor = null)
+    {
+        _item.Type = ItemType.Tool;
+        if (useFor != null)
+            _item.CustomProperties["tool_use"] = useFor;
         return this;
     }
 

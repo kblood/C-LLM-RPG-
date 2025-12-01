@@ -11,7 +11,43 @@ public class Item
     public string Description { get; set; } = string.Empty;
     public ItemType Type { get; set; }
     public int Weight { get; set; }
-    public int Value { get; set; } // Gold/currency worth
+    public int Value { get; set; } // Base currency worth (legacy, use Pricing for full control)
+
+    /// <summary>
+    /// Detailed pricing information for buying and selling.
+    /// If null, uses Value field as base price with default multipliers.
+    /// </summary>
+    public ItemPricing? Pricing { get; set; }
+
+    /// <summary>
+    /// Gets the buy price for this item.
+    /// </summary>
+    public long GetBuyPrice()
+    {
+        if (Pricing != null)
+            return Pricing.GetBuyPrice();
+        return Value; // Default: buy at full value
+    }
+
+    /// <summary>
+    /// Gets the sell price for this item.
+    /// </summary>
+    public long GetSellPrice()
+    {
+        if (Pricing != null)
+            return Pricing.GetSellPrice();
+        return Value / 2; // Default: sell at half value
+    }
+
+    /// <summary>
+    /// Whether this item can be bought from merchants.
+    /// </summary>
+    public bool CanBeBought => Pricing?.CanBuy ?? true;
+
+    /// <summary>
+    /// Whether this item can be sold to merchants.
+    /// </summary>
+    public bool CanBeSold => Pricing?.CanSell ?? (Type != ItemType.QuestItem);
 
     // Combat stats
     public int DamageBonus { get; set; }           // Weapon damage
@@ -42,6 +78,34 @@ public class Item
     // Style/theme for the game world
     public string? Theme { get; set; }             // "fantasy", "sci-fi", "steampunk", etc.
 
+    // Crafting material properties
+    /// <summary>
+    /// Category of material for crafting (ore, herb, wood, etc.).
+    /// Use MaterialCategories constants.
+    /// </summary>
+    public string? MaterialCategory { get; set; }
+
+    /// <summary>
+    /// Difficulty to gather this item (1-100). Higher = harder to find.
+    /// </summary>
+    public int GatherDifficulty { get; set; } = 50;
+
+    /// <summary>
+    /// Biomes where this item can be found naturally.
+    /// Use Biomes constants.
+    /// </summary>
+    public List<string>? FoundInBiomes { get; set; }
+
+    /// <summary>
+    /// Whether this item is primarily for selling (treasure).
+    /// </summary>
+    public bool IsTreasure { get; set; } = false;
+
+    /// <summary>
+    /// Whether this is a junk/flavor item with low value.
+    /// </summary>
+    public bool IsJunk { get; set; } = false;
+
     // General properties
     public bool Stackable { get; set; } = false;
     public bool CanBeTaken { get; set; } = true;
@@ -57,6 +121,10 @@ public enum ItemType
     Teleportation,
     Consumable,
     QuestItem,
+    CraftingMaterial,  // Ore, herbs, wood, etc.
+    Treasure,          // Gems, gold bars - valuable for selling
+    Junk,              // Low-value flavor items
+    Tool,              // Pickaxe, herbalist kit, etc.
     Miscellaneous
 }
 

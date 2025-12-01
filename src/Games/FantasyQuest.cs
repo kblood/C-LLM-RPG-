@@ -33,7 +33,13 @@ public static class FantasyQuest
             .WithTechnology(false)
             .WithNPCRecruitment(true)
             .WithPermadeath(false)
-            .WithFreeRoam(true);
+            .WithFreeRoam(true)
+            // Enable tiered economy (platinum, gold, silver) - player starts with 10 gold, 50 silver
+            .WithTieredEconomy(startingGold: 10, startingSilver: 50)
+            // Enable NPC crafting (blacksmith can forge items)
+            .WithNpcCrafting()
+            // Balanced GM authority - can find resources contextually, NPCs can offer jobs
+            .WithBalancedGameMaster();
 
         // ========== ROOMS ==========
 
@@ -79,6 +85,8 @@ public static class FantasyQuest
             .AddExit("Deeper Into Forest", "dark_forest")
             .AddExit("Up The Slope", "mountain_pass")
             .AddNPCs("ranger")
+            .WithBiome(Biomes.Forest)
+            .WithResourceTags("herbs", "wood", "mushrooms")
             .WithMetadata("danger_level", 1)
             .WithMetadata("lighting", "dim")
             .Build();
@@ -86,9 +94,11 @@ public static class FantasyQuest
         var darkForest = new RoomBuilder("dark_forest")
             .WithName("Dark Forest")
             .WithDescription("Ancient trees tower overhead, blocking out the sky. The air is thick with moisture and the smell of decay. " +
-                "You hear unsettling sounds in the undergrowth.")
+                "You hear unsettling sounds in the undergrowth. Rare herbs and mushrooms grow in the shadows.")
             .AddExit("Back To Entrance", "forest_entrance")
             .AddExit("Continue Deeper", "goblin_cave")
+            .WithBiome(Biomes.Forest)
+            .WithResourceTags("herbs", "mushrooms", "alchemical")
             .WithMetadata("danger_level", 2)
             .WithMetadata("lighting", "pitch_black")
             .Build();
@@ -96,9 +106,11 @@ public static class FantasyQuest
         var goblinCave = new RoomBuilder("goblin_cave")
             .WithName("Goblin Cave")
             .WithDescription("A foul-smelling cave reeking of smoke and waste. Goblin bones litter the floor. " +
-                "Crude drawings cover the walls. This is clearly the lair of the Goblin King.")
+                "Crude drawings cover the walls. This is clearly the lair of the Goblin King. You notice veins of ore in the walls.")
             .AddExit("Back To Forest", "dark_forest")
             .AddNPCs("goblin_king")
+            .WithBiome(Biomes.Cave)
+            .WithResourceTags("ore", "gems", "minerals")
             .WithMetadata("danger_level", 3)
             .WithMetadata("hostile_creatures", new[] { "goblin" })
             .Build();
@@ -110,6 +122,8 @@ public static class FantasyQuest
             .AddExit("Down To Forest", "forest_entrance")
             .AddExit("Higher Into Mountains", "high_peaks")
             .AddNPCs("hermit")
+            .WithBiome(Biomes.Mountain)
+            .WithResourceTags("ore", "gems", "stone")
             .WithMetadata("danger_level", 2)
             .WithMetadata("lighting", "dim")
             .WithMetadata("temperature", "freezing")
@@ -157,8 +171,12 @@ public static class FantasyQuest
             .WithLevel(2)
             .WithAlignment(CharacterAlignment.Good)
             .WithStats(14, 9, 2)
+            .WithTieredCurrency(gold: 100)  // Blacksmith has money to buy items
+            .AsCrafter("blacksmith")  // Can craft weapons and armor
+            .CanOfferDynamicJobs()    // Can offer gathering jobs
             .WithPersonalityPrompt(@"You are Gruff the Blacksmith. You forge weapons and armor. You're gruff but fair,
-                with a heart of gold beneath a rough exterior. You believe in craftsmanship and honor.")
+                with a heart of gold beneath a rough exterior. You believe in craftsmanship and honor. You buy and sell weapons and armor.
+                If someone brings you ore or materials, you can craft items for them. You sometimes need materials and will pay for them.")
             .Build();
         blacksmith.CurrentRoomId = "town_square";
         blacksmith.Role = NPCRole.Merchant;
@@ -203,8 +221,9 @@ public static class FantasyQuest
             .WithHealth(45, 45)
             .WithLevel(1)
             .WithStats(8, 11, 0)
+            .WithTieredCurrency(gold: 50, silver: 75)  // Merchant has money to buy items
             .WithPersonalityPrompt(@"You are Silara, a merchant. You buy and sell goods. You're interested in profit but fair. " +
-                @"You have information about traveling and distant lands.")
+                @"You have information about traveling and distant lands. When customers want to buy, quote prices. When they want to sell, offer fair prices.")
             .Build();
         merchant.CurrentRoomId = "marketplace";
         merchant.Role = NPCRole.Merchant;
@@ -213,8 +232,12 @@ public static class FantasyQuest
             .WithHealth(55, 55)
             .WithLevel(2)
             .WithStats(9, 12, 1)
-            .WithPersonalityPrompt(@"You are Old Hesta, the apothecary. You create potions and remedies. " +
-                @"You're mysterious and somewhat cryptic. You believe in natural magic and herbs.")
+            .AsCrafter("alchemy")  // Can brew potions
+            .CanOfferDynamicJobs() // Can offer herb gathering jobs
+            .WithPersonalityPrompt(@"You are Old Hesta, the apothecary. You create potions and remedies. 
+                You're mysterious and somewhat cryptic. You believe in natural magic and herbs.
+                You often need rare herbs and mushrooms from the forest for your potions, and will pay adventurers to gather them.
+                If someone brings you the right ingredients, you can brew potions for them.")
             .Build();
         apothecary.CurrentRoomId = "marketplace";
         apothecary.Role = NPCRole.Healer;
@@ -398,10 +421,92 @@ public static class FantasyQuest
             .WithTheme("fantasy")
             .Build();
 
+        // Crafting Materials
+        var ironOre = new ItemBuilder("iron_ore")
+            .WithName("Iron Ore")
+            .WithDescription("A chunk of raw iron ore. Can be smelted and forged into weapons and armor.")
+            .AsCraftingMaterial(MaterialCategories.Ore, gatherDifficulty: 40)
+            .FoundIn(Biomes.Cave, Biomes.Mountain)
+            .WithValue(5)
+            .WithTheme("fantasy")
+            .Build();
+
+        var moonpetal = new ItemBuilder("moonpetal")
+            .WithName("Moonpetal Flower")
+            .WithDescription("A delicate flower that glows faintly in darkness. Used in healing potions.")
+            .AsCraftingMaterial(MaterialCategories.Herb, gatherDifficulty: 60)
+            .FoundIn(Biomes.Forest)
+            .WithValue(15)
+            .WithTheme("fantasy")
+            .Build();
+
+        var shadowMushroom = new ItemBuilder("shadow_mushroom")
+            .WithName("Shadow Mushroom")
+            .WithDescription("A dark purple mushroom that grows in deep forests. Has potent alchemical properties.")
+            .AsCraftingMaterial(MaterialCategories.Alchemical, gatherDifficulty: 70)
+            .FoundIn(Biomes.Forest)
+            .WithValue(25)
+            .WithTheme("fantasy")
+            .Build();
+
+        // Treasure
+        var rubyGem = new ItemBuilder("ruby_gem")
+            .WithName("Ruby Gem")
+            .WithDescription("A brilliant red ruby, valuable to collectors and jewelers.")
+            .AsTreasure(100)
+            .WithTheme("fantasy")
+            .Build();
+
         gameBuilder.AddItems(
             ironSword, woodenStaff, dragonSlayer, leatherArmor, dragonPlate,
             caveKey, magicKey, homescroll, mountainPortal,
-            healthPotion, manaPotion, crown);
+            healthPotion, manaPotion, crown,
+            ironOre, moonpetal, shadowMushroom, rubyGem);
+
+        // ========== CRAFTING RECIPES ==========
+        
+        var steelSwordRecipe = new CraftingRecipe
+        {
+            Id = "craft_steel_sword",
+            Name = "Forge Steel Sword",
+            Description = "Forge a superior steel sword from iron ore",
+            OutputItemId = "iron_sword",  // Uses existing sword as output
+            OutputQuantity = 1,
+            Ingredients = new() { new RecipeIngredient { ItemId = "iron_ore", ItemName = "Iron Ore", Quantity = 3 } },
+            CraftingSpecialty = "blacksmith",
+            CraftingCost = 25,  // 25 silver to have blacksmith make it
+            Category = "weapons"
+        };
+
+        var healingPotionRecipe = new CraftingRecipe
+        {
+            Id = "craft_health_potion",
+            Name = "Brew Healing Potion",
+            Description = "Brew a potion of healing from moonpetal flowers",
+            OutputItemId = "health_potion",
+            OutputQuantity = 1,
+            Ingredients = new() { new RecipeIngredient { ItemId = "moonpetal", ItemName = "Moonpetal Flower", Quantity = 2 } },
+            CraftingSpecialty = "alchemy",
+            CraftingCost = 10,
+            Category = "potions"
+        };
+
+        gameBuilder.AddRecipes(steelSwordRecipe, healingPotionRecipe);
+
+        // Give blacksmith weapons and armor to sell
+        blacksmith.CarriedItems["iron_sword"] = new InventoryItem { Item = ironSword, Quantity = 3 };
+        blacksmith.CarriedItems["leather_armor"] = new InventoryItem { Item = leatherArmor, Quantity = 2 };
+        blacksmith.CarriedItems["wooden_staff"] = new InventoryItem { Item = woodenStaff, Quantity = 2 };
+
+        // Give merchant items to sell
+        merchant.CarriedItems["health_potion"] = new InventoryItem { Item = healthPotion, Quantity = 5 };
+        merchant.CarriedItems["home_scroll"] = new InventoryItem { Item = homescroll, Quantity = 2 };
+
+        // Give apothecary potions to sell
+        apothecary.CarriedItems["health_potion"] = new InventoryItem { Item = healthPotion, Quantity = 10 };
+        apothecary.CarriedItems["mana_potion"] = new InventoryItem { Item = manaPotion, Quantity = 5 };
+        apothecary.Wallet.AddTiered(0, 25, 0);  // Apothecary has some gold too
+        apothecary.Role = NPCRole.Merchant;  // Make apothecary a merchant too
 
         // ========== QUESTS ==========
 

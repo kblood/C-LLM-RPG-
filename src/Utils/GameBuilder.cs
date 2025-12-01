@@ -266,6 +266,144 @@ public class GameBuilder
     }
 
     /// <summary>
+    /// Enable a simple single-currency economy (credits, coins, bottlecaps, etc).
+    /// </summary>
+    public GameBuilder WithSimpleEconomy(string currencyName, string symbol = "💰", long startingCurrency = 0)
+    {
+        _game.Economy = EconomyConfig.Simple(currencyName, symbol);
+        _game.StartingCurrency = startingCurrency;
+        return this;
+    }
+
+    /// <summary>
+    /// Enable a tiered economy (platinum, gold, silver).
+    /// </summary>
+    public GameBuilder WithTieredEconomy(
+        string platinumName = "Platinum",
+        string goldName = "Gold",
+        string silverName = "Silver",
+        int conversionRate = 100,
+        int startingPlatinum = 0,
+        int startingGold = 0,
+        int startingSilver = 0)
+    {
+        _game.Economy = EconomyConfig.Tiered(platinumName, goldName, silverName, conversionRate);
+        // Convert starting amounts to base units
+        long total = startingSilver;
+        total += startingGold * conversionRate;
+        total += startingPlatinum * (long)conversionRate * conversionRate;
+        _game.StartingCurrency = total;
+        return this;
+    }
+
+    /// <summary>
+    /// Disable the economy system for this game.
+    /// </summary>
+    public GameBuilder WithoutEconomy()
+    {
+        _game.Economy = EconomyConfig.Disabled();
+        return this;
+    }
+
+    // ========== Game Master Authority ==========
+
+    /// <summary>
+    /// Set strict GM authority (GM can only use predefined content).
+    /// </summary>
+    public GameBuilder WithStrictGameMaster()
+    {
+        _game.Authority = GameMasterAuthority.Strict();
+        return this;
+    }
+
+    /// <summary>
+    /// Set balanced GM authority (some creative freedom).
+    /// </summary>
+    public GameBuilder WithBalancedGameMaster()
+    {
+        _game.Authority = GameMasterAuthority.Balanced();
+        return this;
+    }
+
+    /// <summary>
+    /// Set dynamic GM authority (GM can create content on the fly).
+    /// </summary>
+    public GameBuilder WithDynamicGameMaster()
+    {
+        _game.Authority = GameMasterAuthority.Dynamic();
+        return this;
+    }
+
+    /// <summary>
+    /// Set open world GM authority (full creative freedom).
+    /// </summary>
+    public GameBuilder WithOpenWorldGameMaster()
+    {
+        _game.Authority = GameMasterAuthority.OpenWorld();
+        return this;
+    }
+
+    /// <summary>
+    /// Configure custom GM authority.
+    /// </summary>
+    public GameBuilder WithGameMasterAuthority(GameMasterAuthority authority)
+    {
+        _game.Authority = authority;
+        return this;
+    }
+
+    // ========== Crafting System ==========
+
+    /// <summary>
+    /// Enable NPC-only crafting (players ask NPCs to craft).
+    /// </summary>
+    public GameBuilder WithNpcCrafting()
+    {
+        _game.Crafting = CraftingConfig.NpcOnly();
+        return this;
+    }
+
+    /// <summary>
+    /// Enable full crafting (both player and NPC crafting).
+    /// </summary>
+    public GameBuilder WithFullCrafting()
+    {
+        _game.Crafting = CraftingConfig.Full();
+        return this;
+    }
+
+    /// <summary>
+    /// Configure custom crafting settings.
+    /// </summary>
+    public GameBuilder WithCrafting(CraftingConfig config)
+    {
+        _game.Crafting = config;
+        return this;
+    }
+
+    /// <summary>
+    /// Add a crafting recipe to the game.
+    /// </summary>
+    public GameBuilder AddRecipe(CraftingRecipe recipe)
+    {
+        _game.Crafting ??= CraftingConfig.NpcOnly();
+        _game.Crafting.Recipes[recipe.Id] = recipe;
+        return this;
+    }
+
+    /// <summary>
+    /// Add multiple crafting recipes.
+    /// </summary>
+    public GameBuilder AddRecipes(params CraftingRecipe[] recipes)
+    {
+        foreach (var recipe in recipes)
+        {
+            AddRecipe(recipe);
+        }
+        return this;
+    }
+
+    /// <summary>
     /// Build and return the game.
     /// </summary>
     public Game Build()

@@ -36,7 +36,8 @@ public static class SciFiAdventure
             .WithTechnology(true)
             .WithNPCRecruitment(true)
             .WithPermadeath(true)  // Sci-fi can be deadly!
-            .WithFreeRoam(false);  // Linear progression to escape
+            .WithFreeRoam(false)   // Linear progression to escape
+            .WithoutEconomy();     // No trading on a survival escape!
 
         // ========== ROOMS ==========
 

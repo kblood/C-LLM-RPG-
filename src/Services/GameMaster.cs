@@ -18,6 +18,11 @@ public class GameMaster
     private readonly string _gmSystemPrompt;
     private readonly CombatService _combatService;
     private readonly Game? _game;  // Optional reference to the game definition for win conditions
+    private readonly EquipmentSlotConfiguration _equipmentSlots;  // Equipment slot configuration for this game
+    private readonly EconomyConfig _economy;  // Economy configuration for this game
+    private readonly GameMasterAuthority _authority;  // GM authority configuration
+    private readonly CraftingConfig _crafting;  // Crafting configuration
+    private readonly Random _random = new();  // For gathering rolls
     public bool DebugMode { get; set; } = false;  // Toggle for debug output
 
     public GameMaster(GameState gameState, OllamaClient ollamaClient, string? gmSystemPrompt = null, Game? game = null)
@@ -28,6 +33,10 @@ public class GameMaster
         _gmSystemPrompt = gmSystemPrompt ?? GenerateDefaultGMPrompt();
         _combatService = new CombatService();
         _game = game;
+        _equipmentSlots = game?.GetEquipmentSlots() ?? EquipmentSlotConfiguration.CreateDefault();
+        _economy = game?.GetEconomy() ?? EconomyConfig.Disabled();
+        _authority = game?.GetAuthority() ?? GameMasterAuthority.Balanced();
+        _crafting = game?.GetCrafting() ?? CraftingConfig.Disabled();
 
         // Initialize NPC brains with custom personalities
         InitializeNpcBrains();
@@ -103,10 +112,16 @@ public class GameMaster
         var currentRoom = _gameState.GetCurrentRoom();
         var exits = currentRoom.GetAvailableExits();
 
-        // Build NPC list distinguishing alive and dead
+        // Build NPC list distinguishing alive and dead, with merchant indicators
         var aliveNpcs = currentRoom.NPCIds
             .Where(id => _gameState.NPCs.ContainsKey(id) && _gameState.NPCs[id].IsAlive)
-            .Select(id => _gameState.NPCs[id].Name)
+            .Select(id => {
+                var npc = _gameState.NPCs[id];
+                // Add merchant indicator if economy is enabled and NPC is a merchant
+                if (_economy.Enabled && npc.Role == NPCRole.Merchant)
+                    return $"{npc.Name} 🛒";
+                return npc.Name;
+            })
             .ToList();
         var deadNpcs = currentRoom.NPCIds
             .Where(id => _gameState.NPCs.ContainsKey(id) && !_gameState.NPCs[id].IsAlive)
@@ -130,6 +145,13 @@ public class GameMaster
         response.AppendLine();
         response.AppendLine($"📍 **Location:** {currentRoom.Name}");
         response.AppendLine($"❤️ **Health:** {_gameState.Player.Health}/{_gameState.Player.MaxHealth}");
+
+        // Show currency if economy is enabled
+        if (_economy.Enabled)
+        {
+            var currencyDisplay = _gameState.Player.Wallet.Format(_economy);
+            response.AppendLine($"💰 **Currency:** {currencyDisplay}");
+        }
 
         if (exits.Count > 0)
             response.AppendLine($"🚪 **Exits:** {string.Join(", ", exits.Select(e => e.DisplayName))}");
@@ -257,7 +279,7 @@ IMPORTANT: 'target' MUST contain the specific thing the player referred to:
 - For 'look' -> ""target"":""""
 - For 'inventory' -> ""target"":""""
 
-Valid actions: move, look, inventory, talk, follow, examine, take, drop, use, attack, give, stop, status, help
+Valid actions: move, look, inventory, talk, follow, examine, take, drop, use, attack, give, equip, unequip, equipped, buy, sell, shop, gather, search, craft, recipes, quests, stop, status, help
 
 Rules:
 1. Return ONLY the JSON array - no explanation, no code blocks, no markdown
@@ -274,6 +296,17 @@ ITEM RESOLUTION:
 - Always resolve abbreviations and short names to exact item names from the provided context
 - If you cannot resolve the item name from context, still make your best guess based on player intent
 
+ECONOMY COMMANDS (only if merchant NPCs are present):
+- buy: Player wants to purchase an item from a merchant. Target = NPC name, Details = item name
+- sell: Player wants to sell an item to a merchant. Target = NPC name, Details = item name  
+- shop: Player wants to see what a merchant has for sale. Target = NPC name
+
+GATHERING & CRAFTING:
+- gather/search: Player wants to search for resources. Target = what they're looking for (ore, herbs, etc). Details = location context
+- craft: Player wants to craft an item or ask NPC to craft. Target = NPC name (if asking NPC). Details = item to craft
+- recipes: Player wants to see available recipes. Target = NPC name (optional, for NPC recipes)
+- quests: Player wants to see their quest log
+
 Examples of CORRECT responses:
 Player says 'attack chen' -> [{""action"":""attack"",""target"":""Dr. Sarah Chen"",""details"":""""}]
 Player says 'flee' -> [{""action"":""flee"",""target"":"""",""details"":""""}]
@@ -286,6 +319,22 @@ Player says 'search her body' -> [{""action"":""examine"",""target"":""Dr. Sarah
 Player says 'take the loot' -> [{""action"":""take"",""target"":""loot"",""details"":""""}]
 Player says 'go out' -> [{""action"":""move"",""target"":""Out Into Corridor"",""details"":""""}]
 Player says 'look around' -> [{""action"":""look"",""target"":"""",""details"":""""}]
+Player says 'equip sword' AND context shows 'Iron Sword (equipment)' -> [{""action"":""equip"",""target"":""Iron Sword"",""details"":""""}]
+Player says 'wear the helmet' -> [{""action"":""equip"",""target"":""helmet"",""details"":""""}]
+Player says 'unequip sword' -> [{""action"":""unequip"",""target"":""sword"",""details"":""""}]
+Player says 'remove boots' -> [{""action"":""unequip"",""target"":""boots"",""details"":""""}]
+Player says 'show equipment' -> [{""action"":""equipped"",""target"":"""",""details"":""""}]
+Player says 'what am I wearing' -> [{""action"":""equipped"",""target"":"""",""details"":""""}]
+Player says 'buy sword from merchant' -> [{""action"":""buy"",""target"":""Silara the Merchant"",""details"":""Iron Sword""}]
+Player says 'sell potion' AND context shows merchant -> [{""action"":""sell"",""target"":""Silara the Merchant"",""details"":""Health Potion""}]
+Player says 'what do you have for sale' AND talking to merchant -> [{""action"":""shop"",""target"":""Silara the Merchant"",""details"":""""}]
+Player says 'browse wares' -> [{""action"":""shop"",""target"":"""",""details"":""""}]
+Player says 'search for ore' -> [{""action"":""gather"",""target"":""ore"",""details"":""""}]
+Player says 'look for herbs' -> [{""action"":""gather"",""target"":""herbs"",""details"":""""}]
+Player says 'forage for mushrooms' -> [{""action"":""gather"",""target"":""mushrooms"",""details"":""""}]
+Player says 'ask blacksmith to forge a sword' -> [{""action"":""craft"",""target"":""Gruff the Blacksmith"",""details"":""sword""}]
+Player says 'what can you craft' -> [{""action"":""recipes"",""target"":"""",""details"":""""}]
+Player says 'check my quests' -> [{""action"":""quests"",""target"":"""",""details"":""""}]
 
 []"
             },
@@ -589,6 +638,37 @@ CRITICAL RULES:
             "",
         };
 
+        // Add economy commands if enabled
+        if (_economy.Enabled)
+        {
+            actions.Insert(actions.Count - 1, "=== ECONOMY COMMANDS ===");
+            actions.Insert(actions.Count - 1, "shop - View a merchant's wares");
+            actions.Insert(actions.Count - 1, "buy [item] - Buy an item from a merchant");
+            actions.Insert(actions.Count - 1, "sell [item] - Sell an item to a merchant");
+            actions.Insert(actions.Count - 1, "");
+        }
+
+        // Add crafting commands if enabled
+        if (_crafting.Enabled)
+        {
+            actions.Insert(actions.Count - 1, "=== CRAFTING COMMANDS ===");
+            actions.Insert(actions.Count - 1, "recipes - View available recipes from a crafter");
+            actions.Insert(actions.Count - 1, "craft [item] - Ask a crafter to make something");
+            actions.Insert(actions.Count - 1, "");
+        }
+
+        // Add gathering commands if room has resources or GM can create them
+        if (room.Resources != null || _authority.CanDecideResources)
+        {
+            actions.Insert(actions.Count - 1, "=== GATHERING COMMANDS ===");
+            actions.Insert(actions.Count - 1, "search [resource] - Search for resources (ore, herbs, etc.)");
+            actions.Insert(actions.Count - 1, "gather/forage - Gather materials from the environment");
+            actions.Insert(actions.Count - 1, "");
+        }
+
+        // Quest commands
+        actions.Insert(actions.Count - 1, "quests - View your quest log");
+
         if (_gameState.InCombatMode)
         {
             actions.Insert(actions.Count - 1, "=== COMBAT COMMANDS ===");
@@ -615,8 +695,18 @@ CRITICAL RULES:
                 actions.Add($"NPCs: {string.Join(", ", npcNames)}");
         }
 
+        // Show biome/resource info if available
+        if (room.Resources?.Biome != null)
+        {
+            actions.Add($"Biome: {room.Resources.Biome}");
+        }
+        if (room.Resources?.ResourceTags.Count > 0)
+        {
+            actions.Add($"Resources: {string.Join(", ", room.Resources.ResourceTags)}");
+        }
+
         actions.Add("");
-        actions.Add("💡 Tip: You can use natural language! Try: 'go to the tavern', 'examine the sword', 'drink the potion', etc.");
+        actions.Add("💡 Tip: You can use natural language! Try: 'go to the tavern', 'search for ore', 'ask blacksmith to craft sword', etc.");
 
         return string.Join("\n", actions);
     }
@@ -794,6 +884,40 @@ RULES:
         if (lower == "stop" || lower == "flee" || lower == "run" || lower == "exit combat")
             return new ActionPlan { Action = "stop", Target = "", Details = "" };
 
+        // Check for equipment commands
+        if (lower == "equipped" || lower == "equipment" || lower == "show equipment" ||
+            lower == "what am i wearing" || lower == "what's equipped")
+            return new ActionPlan { Action = "equipped", Target = "", Details = "" };
+
+        if (lower.StartsWith("equip") || lower.StartsWith("wear") || lower.StartsWith("wield"))
+        {
+            // Extract item name from command
+            var itemKeywords = new[] { "equip", "wear", "wield", "the", "a", "an", "my" };
+            var words = lower.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            var itemWords = words.Where(w => !itemKeywords.Contains(w)).ToList();
+            var itemName = string.Join(" ", itemWords);
+
+            if (!string.IsNullOrWhiteSpace(itemName))
+            {
+                return new ActionPlan { Action = "equip", Target = itemName, Details = "" };
+            }
+        }
+
+        if (lower.StartsWith("unequip") || lower.StartsWith("remove") || lower.StartsWith("dequip") ||
+            lower.StartsWith("take off"))
+        {
+            // Extract item name or slot from command
+            var itemKeywords = new[] { "unequip", "remove", "dequip", "take", "off", "the", "a", "an", "my" };
+            var words = lower.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            var itemWords = words.Where(w => !itemKeywords.Contains(w)).ToList();
+            var itemName = string.Join(" ", itemWords);
+
+            if (!string.IsNullOrWhiteSpace(itemName))
+            {
+                return new ActionPlan { Action = "unequip", Target = itemName, Details = "" };
+            }
+        }
+
         // Check for attack commands
         if (lower.StartsWith("attack") || lower.StartsWith("fight") || lower.StartsWith("kill") || lower.StartsWith("hit"))
         {
@@ -899,6 +1023,97 @@ RULES:
                     }
                 }
             }
+        }
+
+        // Check for economy commands (buy, sell, shop)
+        if (_economy.Enabled)
+        {
+            // Check for shop/browse commands
+            if (lower == "shop" || lower == "browse" || lower == "wares" ||
+                lower.Contains("what do you have") || lower.Contains("for sale") ||
+                lower.Contains("show wares") || lower.Contains("show shop"))
+            {
+                return new ActionPlan { Action = "shop", Target = "", Details = "" };
+            }
+
+            // Check for buy commands
+            if (lower.StartsWith("buy") || lower.StartsWith("purchase"))
+            {
+                var buyKeywords = new[] { "buy", "purchase", "from", "the", "a", "an" };
+                var words = lower.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                var itemWords = words.Where(w => !buyKeywords.Contains(w)).ToList();
+                var itemName = string.Join(" ", itemWords);
+
+                // Try to find merchant in room
+                var merchantNpc = currentRoom.NPCIds
+                    .FirstOrDefault(id => _gameState.NPCs.ContainsKey(id) &&
+                        _gameState.NPCs[id].Role == NPCRole.Merchant && _gameState.NPCs[id].IsAlive);
+                var merchantName = merchantNpc != null ? _gameState.NPCs[merchantNpc].Name : "";
+
+                return new ActionPlan { Action = "buy", Target = merchantName, Details = itemName };
+            }
+
+            // Check for sell commands
+            if (lower.StartsWith("sell"))
+            {
+                var sellKeywords = new[] { "sell", "to", "the", "a", "an", "my" };
+                var words = lower.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                var itemWords = words.Where(w => !sellKeywords.Contains(w)).ToList();
+                var itemName = string.Join(" ", itemWords);
+
+                // Try to find merchant in room
+                var merchantNpc = currentRoom.NPCIds
+                    .FirstOrDefault(id => _gameState.NPCs.ContainsKey(id) &&
+                        _gameState.NPCs[id].Role == NPCRole.Merchant && _gameState.NPCs[id].IsAlive);
+                var merchantName = merchantNpc != null ? _gameState.NPCs[merchantNpc].Name : "";
+
+                return new ActionPlan { Action = "sell", Target = merchantName, Details = itemName };
+            }
+        }
+
+        // Check for gathering commands
+        if (lower.StartsWith("search") || lower.StartsWith("gather") || lower.StartsWith("forage") ||
+            lower.StartsWith("mine") || lower.StartsWith("pick") || lower.Contains("look for"))
+        {
+            var gatherKeywords = new[] { "search", "gather", "forage", "mine", "pick", "look", "for", "the", "some", "any" };
+            var words = lower.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            var targetWords = words.Where(w => !gatherKeywords.Contains(w)).ToList();
+            var target = string.Join(" ", targetWords);
+            if (string.IsNullOrWhiteSpace(target)) target = "resources";
+            return new ActionPlan { Action = "gather", Target = target, Details = "" };
+        }
+
+        // Check for crafting commands
+        if (lower.StartsWith("craft") || lower.Contains("forge") || lower.Contains("brew") || lower.Contains("make"))
+        {
+            var craftKeywords = new[] { "craft", "forge", "brew", "make", "create", "a", "an", "the", "me" };
+            var words = lower.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            var targetWords = words.Where(w => !craftKeywords.Contains(w)).ToList();
+            var target = string.Join(" ", targetWords);
+
+            // Find crafter in room
+            var crafterNpc = currentRoom.NPCIds
+                .FirstOrDefault(id => _gameState.NPCs.ContainsKey(id) &&
+                    _gameState.NPCs[id].CanCraft && _gameState.NPCs[id].IsAlive);
+            var crafterName = crafterNpc != null ? _gameState.NPCs[crafterNpc].Name : "";
+
+            return new ActionPlan { Action = "craft", Target = crafterName, Details = target };
+        }
+
+        // Check for recipe viewing
+        if (lower.Contains("recipe") || lower.Contains("what can you make") || lower.Contains("what can you craft"))
+        {
+            var crafterNpc = currentRoom.NPCIds
+                .FirstOrDefault(id => _gameState.NPCs.ContainsKey(id) &&
+                    _gameState.NPCs[id].CanCraft && _gameState.NPCs[id].IsAlive);
+            var crafterName = crafterNpc != null ? _gameState.NPCs[crafterNpc].Name : "";
+            return new ActionPlan { Action = "recipes", Target = crafterName, Details = "" };
+        }
+
+        // Check for quest log
+        if (lower.Contains("quest") || lower == "quests" || lower.Contains("quest log") || lower.Contains("my quests"))
+        {
+            return new ActionPlan { Action = "quests", Target = "", Details = "" };
         }
 
         return null;
@@ -1021,6 +1236,17 @@ MATCHING STRATEGY:
             "drop" => HandleDrop(plan.Target),
             "use" => HandleUse(plan.Target, plan.Details),
             "give" => await HandleGiveAsync(plan.Target, string.IsNullOrEmpty(plan.Details) ? playerCommand : plan.Details),
+            "equip" => HandleEquip(plan.Target),
+            "unequip" => HandleUnequip(plan.Target),
+            "equipped" => HandleEquipped(),
+            "buy" => HandleBuy(plan.Target, plan.Details),
+            "sell" => HandleSell(plan.Target, plan.Details),
+            "shop" => HandleShop(plan.Target),
+            "gather" => await HandleGatherAsync(plan.Target, plan.Details),
+            "search" => await HandleGatherAsync(plan.Target, plan.Details),
+            "craft" => HandleCraft(plan.Target, plan.Details),
+            "recipes" => HandleRecipes(plan.Target),
+            "quests" => HandleQuests(),
             "help" => HandleHelp(),
             "status" => HandleStatus(),
             "unknown" => HandleUnknownAction(plan.Target),
@@ -1470,6 +1696,17 @@ RULES:
             var xpGain = (npc.Level * 10) + (npc.MaxHealth / 5);
             _gameState.Player.GainExperience(xpGain);
             message.AppendLine($"\n🎉 {npc.Name} is defeated! You gain {xpGain} experience.");
+
+            // Loot currency if economy is enabled and NPC had money
+            if (_economy.Enabled && npc.Wallet.TotalBaseUnits > 0)
+            {
+                var lootedMoney = npc.Wallet.TotalBaseUnits;
+                _gameState.Player.Wallet.Add(lootedMoney);
+                npc.Wallet.TotalBaseUnits = 0;
+                var moneyDisplay = Wallet.FormatAmount(lootedMoney, _economy);
+                message.AppendLine($"💰 You loot {moneyDisplay} from the body!");
+            }
+
             message.AppendLine($"The {npc.Name}'s body remains here for you to search or examine.");
 
             // Exit combat mode
@@ -1618,6 +1855,12 @@ RULES:
                 details += $" (Damage: {inventoryItem.Item.DamageBonus})";
             else if (inventoryItem.Item.Type == ItemType.Armor)
                 details += $" (Armor: {inventoryItem.Item.ArmorBonus})";
+            // Show value if economy is enabled
+            if (_economy.Enabled)
+            {
+                var sellPrice = inventoryItem.Item.GetSellPrice();
+                details += $"\nSell value: {Wallet.FormatAmount(sellPrice, _economy)}";
+            }
             return new ActionResult { Success = true, Message = details };
         }
 
@@ -1637,6 +1880,12 @@ RULES:
                 var healthBar = BuildHealthBar(healthPercent, 20);
                 npcDesc += $"\n\nHealth: {healthBar} {npcObj.Health}/{npcObj.MaxHealth} HP";
                 npcDesc += $"\nLevel: {npcObj.Level} | Strength: {npcObj.Strength} | Agility: {npcObj.Agility} | Armor: {npcObj.Armor}";
+
+                // Show merchant indicator
+                if (_economy.Enabled && npcObj.Role == NPCRole.Merchant)
+                {
+                    npcDesc += $"\n\n🛒 This is a merchant. Use 'shop' to see their wares.";
+                }
             }
             // Show additional info if the NPC is dead
             else
@@ -1864,6 +2113,933 @@ RULES:
         return new ActionResult { Success = false, Message = $"You can't use {item.Name} like that." };
     }
 
+    private ActionResult HandleEquip(string? itemName)
+    {
+        if (string.IsNullOrWhiteSpace(itemName))
+            return new ActionResult { Success = false, Message = "Equip what?" };
+
+        // Find item in inventory
+        var itemLower = itemName.ToLower();
+        var inventoryItem = _gameState.PlayerInventory.Items.Values
+            .FirstOrDefault(ii => ii.Item.Name.ToLower().Contains(itemLower) ||
+                                  ii.Item.Id.ToLower().Contains(itemLower));
+
+        if (inventoryItem == null)
+            return new ActionResult { Success = false, Message = $"You don't have '{itemName}' in your inventory." };
+
+        var item = inventoryItem.Item;
+
+        // Check if item is equippable
+        if (!item.IsEquippable)
+            return new ActionResult { Success = false, Message = $"{item.Name} cannot be equipped." };
+
+        // Determine equipment slot
+        string slot = item.EquipmentSlot ?? DetermineSlotFromType(item);
+
+        if (string.IsNullOrEmpty(slot))
+            return new ActionResult { Success = false, Message = $"{item.Name} doesn't have a valid equipment slot." };
+
+        // Check if slot is already occupied
+        string? previousItemId = null;
+        if (_gameState.Player.EquipmentSlots.TryGetValue(slot, out var occupiedItemId) && occupiedItemId != null)
+        {
+            previousItemId = occupiedItemId;
+        }
+
+        // Equip the item
+        bool success = _gameState.Player.EquipItem(item, slot);
+
+        if (success)
+        {
+            var message = new StringBuilder();
+            message.Append($"You equip {item.Name}");
+
+            // Mention if we unequipped something
+            if (previousItemId != null && _gameState.Player.CarriedItems.TryGetValue(previousItemId, out var prevItem))
+            {
+                message.Append($" (unequipped {prevItem.Item.Name})");
+            }
+
+            message.Append(".");
+
+            // Show stat bonuses
+            if (item.DamageBonus > 0)
+                message.Append($" [+{item.DamageBonus} damage]");
+            if (item.ArmorBonus > 0)
+                message.Append($" [+{item.ArmorBonus} armor]");
+
+            return new ActionResult { Success = true, Message = message.ToString() };
+        }
+        else
+        {
+            return new ActionResult { Success = false, Message = $"Cannot equip {item.Name} in the {slot} slot." };
+        }
+    }
+
+    private ActionResult HandleUnequip(string? target)
+    {
+        if (string.IsNullOrWhiteSpace(target))
+            return new ActionResult { Success = false, Message = "Unequip what?" };
+
+        var targetLower = target.ToLower();
+
+        // Try to match by item name first
+        string? slotToUnequip = null;
+        Item? itemToUnequip = null;
+
+        foreach (var kvp in _gameState.Player.EquipmentSlots)
+        {
+            if (kvp.Value != null && _gameState.Player.CarriedItems.TryGetValue(kvp.Value, out var inventoryItem))
+            {
+                if (inventoryItem.Item.Name.ToLower().Contains(targetLower))
+                {
+                    slotToUnequip = kvp.Key;
+                    itemToUnequip = inventoryItem.Item;
+                    break;
+                }
+            }
+        }
+
+        // If not found by name, try by slot name
+        if (slotToUnequip == null)
+        {
+            var knownSlots = new[] { "main_hand", "off_hand", "head", "chest", "hands", "legs", "feet" };
+            var matchedSlot = knownSlots.FirstOrDefault(s => s.Replace("_", "").Contains(targetLower) ||
+                                                              s.Contains(targetLower));
+
+            if (matchedSlot != null && _gameState.Player.EquipmentSlots.TryGetValue(matchedSlot, out var itemId) && itemId != null)
+            {
+                if (_gameState.Player.CarriedItems.TryGetValue(itemId, out var inventoryItem))
+                {
+                    slotToUnequip = matchedSlot;
+                    itemToUnequip = inventoryItem.Item;
+                }
+            }
+        }
+
+        if (slotToUnequip == null || itemToUnequip == null)
+            return new ActionResult { Success = false, Message = $"You don't have '{target}' equipped." };
+
+        // Unequip the item
+        var unequippedItem = _gameState.Player.UnequipItem(slotToUnequip);
+
+        if (unequippedItem != null)
+        {
+            return new ActionResult { Success = true, Message = $"You unequip {itemToUnequip.Name}." };
+        }
+        else
+        {
+            return new ActionResult { Success = false, Message = $"Cannot unequip {itemToUnequip.Name}." };
+        }
+    }
+
+    private ActionResult HandleEquipped()
+    {
+        var equipped = new List<string>();
+
+        // Use the dynamic equipment slot configuration
+        foreach (var slotDef in _equipmentSlots.GetOrderedSlots())
+        {
+            if (_gameState.Player.EquipmentSlots.TryGetValue(slotDef.Id, out var itemId) && itemId != null)
+            {
+                if (_gameState.Player.CarriedItems.TryGetValue(itemId, out var inventoryItem))
+                {
+                    var item = inventoryItem.Item;
+                    var bonuses = new List<string>();
+                    if (item.DamageBonus > 0) bonuses.Add($"+{item.DamageBonus} dmg");
+                    if (item.ArmorBonus > 0) bonuses.Add($"+{item.ArmorBonus} armor");
+
+                    string bonusText = bonuses.Count > 0 ? $" [{string.Join(", ", bonuses)}]" : "";
+                    equipped.Add($"  {slotDef.DisplayName}: {item.Name}{bonusText}");
+                }
+            }
+        }
+
+        if (equipped.Count == 0)
+            return new ActionResult { Success = true, Message = "You have nothing equipped." };
+
+        var message = new StringBuilder();
+        message.AppendLine("Currently Equipped:");
+        foreach (var line in equipped)
+        {
+            message.AppendLine(line);
+        }
+
+        // Add total bonuses - calculate total damage and armor
+        int totalDamage = _gameState.Player.GetTotalDamage(null);
+
+        // Find equipped weapon from any weapon slot
+        Item? equippedWeapon = null;
+        foreach (var slotDef in _equipmentSlots.Slots)
+        {
+            if (slotDef.CompatibleTypes.Contains(ItemType.Weapon))
+            {
+                if (_gameState.Player.EquipmentSlots.TryGetValue(slotDef.Id, out var weaponId) && weaponId != null)
+                {
+                    equippedWeapon = _gameState.Player.CarriedItems.GetValueOrDefault(weaponId)?.Item;
+                    if (equippedWeapon != null) break;
+                }
+            }
+        }
+
+        int totalDamageWithWeapon = _gameState.Player.GetTotalDamage(equippedWeapon);
+        int totalArmor = _gameState.Player.Armor;
+
+        // Calculate equipped armor bonus from all armor slots
+        int equippedArmorBonus = 0;
+        foreach (var slotDef in _equipmentSlots.Slots)
+        {
+            if (slotDef.CompatibleTypes.Contains(ItemType.Armor))
+            {
+                if (_gameState.Player.EquipmentSlots.TryGetValue(slotDef.Id, out var armorItemId) && armorItemId != null)
+                {
+                    if (_gameState.Player.CarriedItems.TryGetValue(armorItemId, out var armorItem))
+                    {
+                        equippedArmorBonus += armorItem.Item.ArmorBonus;
+                    }
+                }
+            }
+        }
+        totalArmor += equippedArmorBonus;
+
+        message.AppendLine();
+        message.Append($"Total: {totalDamageWithWeapon} damage, {totalArmor} armor");
+
+        return new ActionResult { Success = true, Message = message.ToString().TrimEnd() };
+    }
+
+    /// <summary>
+    /// Handle buying an item from a merchant.
+    /// </summary>
+    private ActionResult HandleBuy(string npcName, string itemName)
+    {
+        // Check if economy is enabled
+        if (!_economy.Enabled)
+            return new ActionResult { Success = false, Message = "This game doesn't have an economy system." };
+
+        var room = _gameState.GetCurrentRoom();
+
+        // Find the merchant NPC
+        Character? merchant = FindNpcInRoom(npcName, room);
+        if (merchant == null)
+        {
+            // If no specific NPC given, find any merchant in the room
+            merchant = room.NPCIds
+                .Where(id => _gameState.NPCs.ContainsKey(id) && _gameState.NPCs[id].IsAlive && _gameState.NPCs[id].Role == NPCRole.Merchant)
+                .Select(id => _gameState.NPCs[id])
+                .FirstOrDefault();
+        }
+
+        if (merchant == null)
+            return new ActionResult { Success = false, Message = "There's no merchant here to buy from." };
+
+        if (!merchant.IsAlive)
+            return new ActionResult { Success = false, Message = $"{merchant.Name} is dead." };
+
+        if (merchant.Role != NPCRole.Merchant)
+            return new ActionResult { Success = false, Message = $"{merchant.Name} is not a merchant." };
+
+        if (string.IsNullOrWhiteSpace(itemName))
+            return new ActionResult { Success = false, Message = "Buy what?" };
+
+        // Find the item in merchant's inventory
+        var itemLower = itemName.ToLower();
+        var merchantItem = merchant.CarriedItems.Values
+            .FirstOrDefault(ii => ii.Item.Name.ToLower().Contains(itemLower));
+
+        if (merchantItem == null)
+            return new ActionResult { Success = false, Message = $"{merchant.Name} doesn't have '{itemName}' for sale." };
+
+        var item = merchantItem.Item;
+        var price = item.GetBuyPrice();
+
+        // Check if player can afford it
+        if (!_gameState.Player.Wallet.CanAfford(price))
+        {
+            var playerMoney = _gameState.Player.Wallet.Format(_economy);
+            var priceFormatted = Wallet.FormatAmount(price, _economy);
+            return new ActionResult
+            {
+                Success = false,
+                Message = $"{item.Name} costs {priceFormatted}. You only have {playerMoney}."
+            };
+        }
+
+        // Complete the transaction
+        _gameState.Player.Wallet.Remove(price);
+        merchant.Wallet.Add(price);
+        _gameState.PlayerInventory.AddItem(item, 1);
+
+        // Remove from merchant (if quantity = 1, remove entirely)
+        if (merchantItem.Quantity <= 1)
+            merchant.CarriedItems.Remove(item.Id);
+        else
+            merchantItem.Quantity--;
+
+        var priceDisplay = Wallet.FormatAmount(price, _economy);
+        return new ActionResult
+        {
+            Success = true,
+            Message = $"You bought {item.Name} from {merchant.Name} for {priceDisplay}."
+        };
+    }
+
+    /// <summary>
+    /// Handle selling an item to a merchant.
+    /// </summary>
+    private ActionResult HandleSell(string npcName, string itemName)
+    {
+        // Check if economy is enabled
+        if (!_economy.Enabled)
+            return new ActionResult { Success = false, Message = "This game doesn't have an economy system." };
+
+        var room = _gameState.GetCurrentRoom();
+
+        // Find the merchant NPC
+        Character? merchant = FindNpcInRoom(npcName, room);
+        if (merchant == null)
+        {
+            // If no specific NPC given, find any merchant in the room
+            merchant = room.NPCIds
+                .Where(id => _gameState.NPCs.ContainsKey(id) && _gameState.NPCs[id].IsAlive && _gameState.NPCs[id].Role == NPCRole.Merchant)
+                .Select(id => _gameState.NPCs[id])
+                .FirstOrDefault();
+        }
+
+        if (merchant == null)
+            return new ActionResult { Success = false, Message = "There's no merchant here to sell to." };
+
+        if (!merchant.IsAlive)
+            return new ActionResult { Success = false, Message = $"{merchant.Name} is dead." };
+
+        if (merchant.Role != NPCRole.Merchant)
+            return new ActionResult { Success = false, Message = $"{merchant.Name} is not a merchant." };
+
+        if (string.IsNullOrWhiteSpace(itemName))
+            return new ActionResult { Success = false, Message = "Sell what?" };
+
+        // Find the item in player's inventory
+        var itemLower = itemName.ToLower();
+        var playerItem = _gameState.PlayerInventory.Items.Values
+            .FirstOrDefault(ii => ii.Item.Name.ToLower().Contains(itemLower));
+
+        if (playerItem == null)
+            return new ActionResult { Success = false, Message = $"You don't have '{itemName}' to sell." };
+
+        var item = playerItem.Item;
+
+        // Check if item can be sold
+        if (!item.CanBeSold)
+            return new ActionResult { Success = false, Message = $"{item.Name} cannot be sold." };
+
+        var sellPrice = item.GetSellPrice();
+
+        // Check if merchant can afford it
+        if (!merchant.Wallet.CanAfford(sellPrice))
+        {
+            return new ActionResult
+            {
+                Success = false,
+                Message = $"{merchant.Name} doesn't have enough money to buy {item.Name}."
+            };
+        }
+
+        // Complete the transaction
+        merchant.Wallet.Remove(sellPrice);
+        _gameState.Player.Wallet.Add(sellPrice);
+        _gameState.PlayerInventory.RemoveItem(item.Id, 1);
+
+        // Add to merchant's inventory
+        if (merchant.CarriedItems.ContainsKey(item.Id))
+            merchant.CarriedItems[item.Id].Quantity++;
+        else
+            merchant.CarriedItems[item.Id] = new InventoryItem { Item = item, Quantity = 1 };
+
+        var priceDisplay = Wallet.FormatAmount(sellPrice, _economy);
+        return new ActionResult
+        {
+            Success = true,
+            Message = $"You sold {item.Name} to {merchant.Name} for {priceDisplay}."
+        };
+    }
+
+    /// <summary>
+    /// Handle viewing a merchant's wares.
+    /// </summary>
+    private ActionResult HandleShop(string npcName)
+    {
+        // Check if economy is enabled
+        if (!_economy.Enabled)
+            return new ActionResult { Success = false, Message = "This game doesn't have an economy system." };
+
+        var room = _gameState.GetCurrentRoom();
+
+        // Find the merchant NPC
+        Character? merchant = FindNpcInRoom(npcName, room);
+        if (merchant == null)
+        {
+            // If no specific NPC given, find any merchant in the room
+            merchant = room.NPCIds
+                .Where(id => _gameState.NPCs.ContainsKey(id) && _gameState.NPCs[id].IsAlive && _gameState.NPCs[id].Role == NPCRole.Merchant)
+                .Select(id => _gameState.NPCs[id])
+                .FirstOrDefault();
+        }
+
+        if (merchant == null)
+            return new ActionResult { Success = false, Message = "There's no merchant here." };
+
+        if (!merchant.IsAlive)
+            return new ActionResult { Success = false, Message = $"{merchant.Name} is dead." };
+
+        if (merchant.Role != NPCRole.Merchant)
+            return new ActionResult { Success = false, Message = $"{merchant.Name} is not a merchant." };
+
+        if (merchant.CarriedItems.Count == 0)
+            return new ActionResult { Success = true, Message = $"{merchant.Name} has nothing for sale right now." };
+
+        var message = new StringBuilder();
+        message.AppendLine($"🛒 {merchant.Name}'s Wares:");
+        message.AppendLine();
+
+        foreach (var inventoryItem in merchant.CarriedItems.Values)
+        {
+            var item = inventoryItem.Item;
+            var price = item.GetBuyPrice();
+            var priceDisplay = Wallet.FormatAmount(price, _economy);
+
+            var itemInfo = $"  • {item.Name}";
+            if (inventoryItem.Quantity > 1)
+                itemInfo += $" (x{inventoryItem.Quantity})";
+            itemInfo += $" - {priceDisplay}";
+
+            // Add item type info
+            if (item.Type == ItemType.Weapon)
+                itemInfo += $" [+{item.DamageBonus} dmg]";
+            else if (item.Type == ItemType.Armor)
+                itemInfo += $" [+{item.ArmorBonus} armor]";
+            else if (item.IsConsumable)
+                itemInfo += " [consumable]";
+
+            message.AppendLine(itemInfo);
+        }
+
+        message.AppendLine();
+        var playerMoney = _gameState.Player.Wallet.Format(_economy);
+        message.Append($"Your money: {playerMoney}");
+
+        return new ActionResult { Success = true, Message = message.ToString() };
+    }
+
+    /// <summary>
+    /// Find an NPC in the current room by name.
+    /// </summary>
+    private Character? FindNpcInRoom(string npcName, Room room)
+    {
+        if (string.IsNullOrWhiteSpace(npcName))
+            return null;
+
+        var npcNameLower = npcName.ToLower();
+        var npcId = room.NPCIds.FirstOrDefault(id =>
+            _gameState.NPCs.ContainsKey(id) &&
+            _gameState.NPCs[id].Name.ToLower().Contains(npcNameLower));
+
+        return npcId != null ? _gameState.NPCs[npcId] : null;
+    }
+
+    // ========== GATHERING SYSTEM ==========
+
+    /// <summary>
+    /// Handle gathering/searching for resources.
+    /// </summary>
+    private async Task<ActionResult> HandleGatherAsync(string target, string details)
+    {
+        var room = _gameState.GetCurrentRoom();
+        var targetLower = target?.ToLower() ?? "";
+
+        // Check for defined resources in this room
+        if (room.Resources?.Resources.Count > 0)
+        {
+            // Try to find a matching resource
+            var matchingResource = room.Resources.Resources
+                .FirstOrDefault(r => 
+                    r.ItemId.ToLower().Contains(targetLower) ||
+                    (r.DisplayName?.ToLower().Contains(targetLower) ?? false) ||
+                    targetLower.Contains(r.GatherVerb.ToLower()));
+
+            if (matchingResource != null)
+            {
+                return TryGatherResource(matchingResource, room);
+            }
+
+            // Check if resource tags match
+            var hasMatchingTag = room.Resources.ResourceTags
+                .Any(t => t.ToLower().Contains(targetLower) || targetLower.Contains(t.ToLower()));
+
+            if (hasMatchingTag && room.Resources.Resources.Count > 0)
+            {
+                // Pick a random appropriate resource
+                var randomResource = room.Resources.Resources[_random.Next(room.Resources.Resources.Count)];
+                return TryGatherResource(randomResource, room);
+            }
+        }
+
+        // If GM has authority to decide resources dynamically
+        if (_authority.CanDecideResources)
+        {
+            return await TryDynamicGatherAsync(target ?? "resources", room);
+        }
+
+        // No resources found and no dynamic gathering allowed
+        var biomeInfo = room.Resources?.Biome ?? "this area";
+        return new ActionResult
+        {
+            Success = false,
+            Message = $"You search {biomeInfo} thoroughly but find no {target}."
+        };
+    }
+
+    /// <summary>
+    /// Attempt to gather a defined resource.
+    /// </summary>
+    private ActionResult TryGatherResource(GatherableResource resource, Room room)
+    {
+        // Check for required tool
+        if (!string.IsNullOrEmpty(resource.RequiredTool))
+        {
+            var hasTool = _gameState.PlayerInventory.Items.Values
+                .Any(ii => ii.Item.Id == resource.RequiredTool || 
+                           ii.Item.Name.ToLower().Contains(resource.RequiredTool.ToLower()));
+            if (!hasTool)
+            {
+                return new ActionResult
+                {
+                    Success = false,
+                    Message = $"You need a {resource.RequiredTool} to gather this resource."
+                };
+            }
+        }
+
+        // Check if resource is depleted
+        if (room.Resources?.DepletedResources.ContainsKey(resource.ItemId) == true)
+        {
+            return new ActionResult
+            {
+                Success = false,
+                Message = $"This area has been searched recently. Try again later."
+            };
+        }
+
+        // Roll for success
+        var roll = _random.Next(100);
+        var successChance = resource.FindChance;
+
+        // Apply skill bonus if applicable
+        if (!string.IsNullOrEmpty(resource.RelatedSkill) && 
+            _gameState.Player.Skills.TryGetValue(resource.RelatedSkill, out var skillLevel))
+        {
+            successChance += skillLevel * 2;
+        }
+
+        if (roll >= successChance)
+        {
+            return new ActionResult
+            {
+                Success = false,
+                Message = $"You search carefully but don't find any {resource.DisplayName ?? resource.ItemId}."
+            };
+        }
+
+        // Success! Determine quantity
+        var quantity = _random.Next(resource.MinQuantity, resource.MaxQuantity + 1);
+
+        // Get or create the item
+        Item? item = null;
+        if (_game?.Items.TryGetValue(resource.ItemId, out item) != true || item == null)
+        {
+            // Create a basic item if not defined
+            item = new Item
+            {
+                Id = resource.ItemId,
+                Name = resource.DisplayName ?? resource.ItemId,
+                Type = ItemType.CraftingMaterial,
+                Stackable = true
+            };
+        }
+
+        // Add to inventory
+        _gameState.PlayerInventory.AddItem(item, quantity);
+
+        // Mark as depleted if not renewable
+        if (!resource.Renewable && room.Resources != null)
+        {
+            room.Resources.DepletedResources[resource.ItemId] = resource.RespawnTurns ?? 10;
+        }
+
+        var verb = resource.GatherVerb == "gather" ? "found" : $"{resource.GatherVerb}ed";
+        return new ActionResult
+        {
+            Success = true,
+            Message = $"You {verb} {quantity}x {item.Name}!"
+        };
+    }
+
+    /// <summary>
+    /// Attempt dynamic resource gathering using LLM.
+    /// </summary>
+    private async Task<ActionResult> TryDynamicGatherAsync(string target, Room room)
+    {
+        var biome = room.Resources?.Biome ?? "unknown";
+        var tags = room.Resources?.ResourceTags ?? new List<string>();
+        
+        var prompt = $@"You are a Game Master deciding if a player can find resources.
+
+Location: {room.Name}
+Description: {room.Description}
+Biome: {biome}
+Resource tags: {string.Join(", ", tags)}
+
+Player is searching for: {target}
+
+Based on the location, decide:
+1. Can this resource reasonably be found here? (yes/no)
+2. If yes, what exactly did they find? (item name)
+3. Quantity found (1-3)
+4. A brief narration of finding it
+
+Respond in JSON format only:
+{{""found"": true/false, ""itemName"": ""name"", ""quantity"": 1, ""narration"": ""..."" }}";
+
+        try
+        {
+            var messages = new List<ChatMessage>
+            {
+                new() { Role = "system", Content = "You are a Game Master. Respond only with valid JSON." },
+                new() { Role = "user", Content = prompt }
+            };
+
+            var response = await _ollamaClient.ChatAsync(messages);
+            
+            // Parse response
+            var jsonMatch = System.Text.RegularExpressions.Regex.Match(response, @"\{[^}]+\}");
+            if (jsonMatch.Success)
+            {
+                var json = System.Text.Json.JsonDocument.Parse(jsonMatch.Value);
+                var found = json.RootElement.GetProperty("found").GetBoolean();
+                
+                if (!found)
+                {
+                    return new ActionResult
+                    {
+                        Success = false,
+                        Message = $"You search the area but don't find any {target} here."
+                    };
+                }
+
+                var itemName = json.RootElement.GetProperty("itemName").GetString() ?? target;
+                var quantity = json.RootElement.TryGetProperty("quantity", out var qtyElem) ? qtyElem.GetInt32() : 1;
+                var narration = json.RootElement.TryGetProperty("narration", out var narrElem) ? narrElem.GetString() : null;
+
+                // Create a dynamic item
+                var itemId = itemName.ToLower().Replace(" ", "_");
+                var item = new Item
+                {
+                    Id = itemId,
+                    Name = itemName,
+                    Type = ItemType.CraftingMaterial,
+                    Stackable = true,
+                    Value = 5
+                };
+
+                _gameState.PlayerInventory.AddItem(item, quantity);
+
+                return new ActionResult
+                {
+                    Success = true,
+                    Message = narration ?? $"You found {quantity}x {itemName}!"
+                };
+            }
+        }
+        catch
+        {
+            // Fall through to default
+        }
+
+        return new ActionResult
+        {
+            Success = false,
+            Message = $"You search but don't find any {target} in this location."
+        };
+    }
+
+    // ========== CRAFTING SYSTEM ==========
+
+    /// <summary>
+    /// Handle crafting requests.
+    /// </summary>
+    private ActionResult HandleCraft(string npcName, string itemToCraft)
+    {
+        if (!_crafting.Enabled)
+            return new ActionResult { Success = false, Message = "Crafting is not available in this game." };
+
+        var room = _gameState.GetCurrentRoom();
+
+        // Find crafter NPC
+        Character? crafter = null;
+        if (!string.IsNullOrWhiteSpace(npcName))
+        {
+            crafter = FindNpcInRoom(npcName, room);
+        }
+        else
+        {
+            // Find any crafter in the room
+            crafter = room.NPCIds
+                .Where(id => _gameState.NPCs.ContainsKey(id) && _gameState.NPCs[id].CanCraft && _gameState.NPCs[id].IsAlive)
+                .Select(id => _gameState.NPCs[id])
+                .FirstOrDefault();
+        }
+
+        if (crafter == null)
+            return new ActionResult { Success = false, Message = "There's no one here who can craft." };
+
+        if (!crafter.CanCraft)
+            return new ActionResult { Success = false, Message = $"{crafter.Name} doesn't know how to craft." };
+
+        if (!crafter.IsAlive)
+            return new ActionResult { Success = false, Message = $"{crafter.Name} is dead." };
+
+        // If no item specified, show what they can craft
+        if (string.IsNullOrWhiteSpace(itemToCraft))
+        {
+            return HandleRecipes(crafter.Name);
+        }
+
+        // Find the recipe
+        var itemLower = itemToCraft.ToLower();
+        var recipe = _crafting.Recipes.Values.FirstOrDefault(r =>
+            r.Name.ToLower().Contains(itemLower) ||
+            r.OutputItemId.ToLower().Contains(itemLower));
+
+        if (recipe == null)
+        {
+            // Check if crafter knows any matching recipes
+            recipe = _crafting.Recipes.Values.FirstOrDefault(r =>
+                crafter.KnownRecipes.Contains(r.Id) ||
+                (crafter.CraftingSpecialty != null && r.CraftingSpecialty == crafter.CraftingSpecialty));
+
+            if (recipe == null)
+                return new ActionResult { Success = false, Message = $"{crafter.Name} doesn't know how to craft '{itemToCraft}'." };
+        }
+
+        // Check if this crafter can make this recipe
+        var canMake = crafter.KnownRecipes.Contains(recipe.Id) ||
+                      (crafter.CraftingSpecialty != null && recipe.CraftingSpecialty == crafter.CraftingSpecialty);
+
+        if (!canMake)
+            return new ActionResult { Success = false, Message = $"{crafter.Name} can't craft {recipe.Name}." };
+
+        // Check if player has ingredients
+        if (!recipe.CanCraft(_gameState.PlayerInventory))
+        {
+            var missing = recipe.Ingredients
+                .Where(i => (_gameState.PlayerInventory.GetItem(i.ItemId)?.Quantity ?? 0) < i.Quantity)
+                .Select(i => $"{i.ItemName ?? i.ItemId} x{i.Quantity}")
+                .ToList();
+
+            return new ActionResult
+            {
+                Success = false,
+                Message = $"You don't have the required materials. Need: {string.Join(", ", missing)}"
+            };
+        }
+
+        // Check if player can afford crafting cost
+        if (recipe.CraftingCost > 0 && _economy.Enabled)
+        {
+            if (!_gameState.Player.Wallet.CanAfford(recipe.CraftingCost))
+            {
+                var costDisplay = Wallet.FormatAmount(recipe.CraftingCost, _economy);
+                return new ActionResult
+                {
+                    Success = false,
+                    Message = $"Crafting {recipe.Name} costs {costDisplay}. You can't afford it."
+                };
+            }
+        }
+
+        // Consume ingredients
+        foreach (var ingredient in recipe.Ingredients)
+        {
+            _gameState.PlayerInventory.RemoveItem(ingredient.ItemId, ingredient.Quantity);
+        }
+
+        // Pay crafting cost
+        if (recipe.CraftingCost > 0 && _economy.Enabled)
+        {
+            _gameState.Player.Wallet.Remove(recipe.CraftingCost);
+            crafter.Wallet.Add(recipe.CraftingCost);
+        }
+
+        // Create the output item
+        if (_game?.Items.TryGetValue(recipe.OutputItemId, out var outputItem) == true)
+        {
+            _gameState.PlayerInventory.AddItem(outputItem, recipe.OutputQuantity);
+        }
+        else
+        {
+            // Create basic item
+            var newItem = new Item
+            {
+                Id = recipe.OutputItemId,
+                Name = recipe.Name,
+                Type = ItemType.Miscellaneous
+            };
+            _gameState.PlayerInventory.AddItem(newItem, recipe.OutputQuantity);
+        }
+
+        var message = new StringBuilder();
+        message.Append($"{crafter.Name} crafts {recipe.OutputQuantity}x {recipe.Name} for you!");
+        if (recipe.CraftingCost > 0 && _economy.Enabled)
+        {
+            message.Append($" (Cost: {Wallet.FormatAmount(recipe.CraftingCost, _economy)})");
+        }
+
+        return new ActionResult { Success = true, Message = message.ToString() };
+    }
+
+    /// <summary>
+    /// Handle viewing available recipes.
+    /// </summary>
+    private ActionResult HandleRecipes(string npcName)
+    {
+        if (!_crafting.Enabled)
+            return new ActionResult { Success = false, Message = "Crafting is not available in this game." };
+
+        var room = _gameState.GetCurrentRoom();
+
+        // Find crafter NPC
+        Character? crafter = null;
+        if (!string.IsNullOrWhiteSpace(npcName))
+        {
+            crafter = FindNpcInRoom(npcName, room);
+        }
+        else
+        {
+            crafter = room.NPCIds
+                .Where(id => _gameState.NPCs.ContainsKey(id) && _gameState.NPCs[id].CanCraft && _gameState.NPCs[id].IsAlive)
+                .Select(id => _gameState.NPCs[id])
+                .FirstOrDefault();
+        }
+
+        if (crafter == null)
+            return new ActionResult { Success = false, Message = "There's no crafter here." };
+
+        // Get recipes this crafter can make
+        var recipes = _crafting.Recipes.Values
+            .Where(r => crafter.KnownRecipes.Contains(r.Id) ||
+                        (crafter.CraftingSpecialty != null && r.CraftingSpecialty == crafter.CraftingSpecialty))
+            .ToList();
+
+        if (recipes.Count == 0)
+            return new ActionResult { Success = true, Message = $"{crafter.Name} doesn't have any recipes available." };
+
+        var message = new StringBuilder();
+        message.AppendLine($"⚒️ {crafter.Name}'s Recipes:");
+        message.AppendLine();
+
+        foreach (var recipe in recipes)
+        {
+            message.Append($"  • {recipe.Name}");
+            if (recipe.CraftingCost > 0 && _economy.Enabled)
+            {
+                message.Append($" - {Wallet.FormatAmount(recipe.CraftingCost, _economy)}");
+            }
+            message.AppendLine();
+            message.AppendLine($"    Requires: {recipe.GetIngredientsDisplay()}");
+        }
+
+        return new ActionResult { Success = true, Message = message.ToString() };
+    }
+
+    // ========== QUEST SYSTEM ==========
+
+    /// <summary>
+    /// Handle viewing quest log.
+    /// </summary>
+    private ActionResult HandleQuests()
+    {
+        var activeQuests = _gameState.ActiveQuests.Where(q => q.Status == QuestStatus.Accepted || q.Status == QuestStatus.InProgress).ToList();
+        var completedQuests = _gameState.ActiveQuests.Where(q => q.Status == QuestStatus.Completed || q.Status == QuestStatus.TurnedIn).ToList();
+
+        if (activeQuests.Count == 0 && completedQuests.Count == 0)
+            return new ActionResult { Success = true, Message = "You have no quests. Talk to NPCs to find opportunities." };
+
+        var message = new StringBuilder();
+        message.AppendLine("📜 Quest Log:");
+        message.AppendLine();
+
+        if (activeQuests.Count > 0)
+        {
+            message.AppendLine("=== Active Quests ===");
+            foreach (var quest in activeQuests)
+            {
+                var typeIcon = quest.Type switch
+                {
+                    QuestType.Story => "⭐",
+                    QuestType.Job => "💼",
+                    QuestType.CraftingOrder => "⚒️",
+                    QuestType.Bounty => "⚔️",
+                    _ => "📋"
+                };
+                message.AppendLine($"{typeIcon} {quest.Title}");
+                message.AppendLine($"   {quest.Description}");
+
+                if (quest.Requirements.Count > 0)
+                {
+                    foreach (var req in quest.Requirements)
+                    {
+                        var checkmark = req.IsMet ? "✓" : "○";
+                        message.AppendLine($"   {checkmark} {req.GetDisplayText()}");
+                    }
+                }
+                else if (quest.Objectives.Count > 0)
+                {
+                    for (int i = 0; i < quest.Objectives.Count; i++)
+                    {
+                        var completed = i < quest.CompletedObjectives.Count;
+                        var checkmark = completed ? "✓" : "○";
+                        message.AppendLine($"   {checkmark} {quest.Objectives[i]}");
+                    }
+                }
+
+                if (quest.Rewards.Currency > 0 && _economy.Enabled)
+                {
+                    message.AppendLine($"   Reward: {Wallet.FormatAmount(quest.Rewards.Currency, _economy)}");
+                }
+                message.AppendLine();
+            }
+        }
+
+        if (completedQuests.Count > 0)
+        {
+            message.AppendLine("=== Completed ===");
+            foreach (var quest in completedQuests.Take(5))
+            {
+                message.AppendLine($"✓ {quest.Title}");
+            }
+        }
+
+        return new ActionResult { Success = true, Message = message.ToString() };
+    }
+
+    /// <summary>
+    /// Determines equipment slot based on item type and the game's slot configuration.
+    /// Uses the dynamic equipment slot system.
+    /// </summary>
+    private string DetermineSlotFromType(Item item)
+    {
+        return _equipmentSlots.DetermineSlotForItem(item) ?? "";
+    }
+
     private ActionResult HandleUnknownAction(string command)
     {
         // For unknown actions, let the LLM narrate what happened
@@ -1893,6 +3069,14 @@ RULES:
             message.AppendLine($"Health: {_gameState.Player.Health}/{_gameState.Player.MaxHealth}");
             message.AppendLine($"Level: {_gameState.Player.Level}");
             message.AppendLine($"Experience: {_gameState.Player.Experience}");
+
+            // Show currency if economy is enabled
+            if (_economy.Enabled)
+            {
+                var currencyDisplay = _gameState.Player.Wallet.Format(_economy);
+                message.AppendLine($"Currency: {currencyDisplay}");
+            }
+
             return new ActionResult { Success = true, Message = message.ToString() };
         }
     }

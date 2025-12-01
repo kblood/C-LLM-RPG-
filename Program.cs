@@ -7,11 +7,19 @@ const string ollamaUrl = "http://localhost:11434";
 const string ollamaModel = "granite4:3b"; // Using Granite 4 3B - lightweight and fast
 var gamesDirectory = Path.Combine(Directory.GetCurrentDirectory(), "games");
 
-// Check if we're in replay mode
-if (args.Length > 0 && args[0] == "replay")
+// Check for special modes
+if (args.Length > 0)
 {
-    await RunReplayMode();
-    return;
+    if (args[0] == "replay")
+    {
+        await RunReplayMode();
+        return;
+    }
+    else if (args[0] == "test-equipment" || args[0] == "test")
+    {
+        RunEquipmentTest();
+        return;
+    }
 }
 
 // Interactive game mode
@@ -82,6 +90,12 @@ async Task RunReplayMode()
             gameState.Rooms = game.Rooms;
             gameState.NPCs = game.NPCs;
             gameState.CurrentRoomId = game.StartingRoomId;
+
+            // Initialize player's starting currency if economy is enabled
+            if (game.Economy?.Enabled == true && game.StartingCurrency > 0)
+            {
+                gameState.Player.Wallet.Add(game.StartingCurrency);
+            }
 
             // Add starting items to inventory
             if (game.CustomSettings.ContainsKey("startingItems"))
@@ -242,6 +256,12 @@ async Task RunInteractiveMode()
     gameState.NPCs = game.NPCs;
     gameState.CurrentRoomId = game.StartingRoomId;
 
+    // Initialize player's starting currency if economy is enabled
+    if (game.Economy?.Enabled == true && game.StartingCurrency > 0)
+    {
+        gameState.Player.Wallet.Add(game.StartingCurrency);
+    }
+
     // Add starting items to player inventory
     // For JSON games, use startingItems from the game definition
     // For static games, add all weapons and armor
@@ -385,4 +405,11 @@ async Task RunInteractiveMode()
     // Close the session log
     sessionLog.Dispose();
     Console.WriteLine($"\n📝 Session log saved to: {sessionLogPath}");
+}
+
+void RunEquipmentTest()
+{
+    Console.WriteLine("\n🎮 Running Equipment System Test Mode\n");
+    CSharpRPGBackend.EquipmentTest.RunTest();
+    Console.WriteLine("\n✅ Test Complete!");
 }

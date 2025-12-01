@@ -98,6 +98,54 @@ public class RoomBuilder
     }
 
     /// <summary>
+    /// Set the biome for this room (affects resource gathering).
+    /// </summary>
+    public RoomBuilder WithBiome(string biome)
+    {
+        _room.Resources ??= new RoomResources();
+        _room.Resources.Biome = biome;
+        return this;
+    }
+
+    /// <summary>
+    /// Add resource tags that describe what can be found here.
+    /// </summary>
+    public RoomBuilder WithResourceTags(params string[] tags)
+    {
+        _room.Resources ??= new RoomResources();
+        _room.Resources.ResourceTags.AddRange(tags);
+        return this;
+    }
+
+    /// <summary>
+    /// Add a gatherable resource to this room.
+    /// </summary>
+    public RoomBuilder AddGatherableResource(string itemId, int findChance = 50, int minQty = 1, int maxQty = 1, string? gatherVerb = null, string? requiredTool = null)
+    {
+        _room.Resources ??= new RoomResources();
+        _room.Resources.Resources.Add(new GatherableResource
+        {
+            ItemId = itemId,
+            FindChance = findChance,
+            MinQuantity = minQty,
+            MaxQuantity = maxQty,
+            GatherVerb = gatherVerb ?? "gather",
+            RequiredTool = requiredTool
+        });
+        return this;
+    }
+
+    /// <summary>
+    /// Add a full gatherable resource configuration.
+    /// </summary>
+    public RoomBuilder AddGatherableResource(GatherableResource resource)
+    {
+        _room.Resources ??= new RoomResources();
+        _room.Resources.Resources.Add(resource);
+        return this;
+    }
+
+    /// <summary>
     /// Build and return the room.
     /// </summary>
     public Room Build()
@@ -181,6 +229,72 @@ public class NpcBuilder
     public NpcBuilder WithLoot(Item item, int quantity = 1)
     {
         _character.CarriedItems[item.Id] = new InventoryItem { Item = item, Quantity = quantity };
+        return this;
+    }
+
+    /// <summary>
+    /// Set the NPC's starting currency (for simple economy).
+    /// </summary>
+    public NpcBuilder WithCurrency(long amount)
+    {
+        _character.Wallet.Add(amount);
+        return this;
+    }
+
+    /// <summary>
+    /// Set the NPC's starting currency (for tiered economy).
+    /// </summary>
+    public NpcBuilder WithTieredCurrency(int platinum = 0, int gold = 0, int silver = 0, int conversionRate = 100)
+    {
+        _character.Wallet.AddTiered(platinum, gold, silver, conversionRate);
+        return this;
+    }
+
+    /// <summary>
+    /// Make this NPC a crafter with a specialty.
+    /// </summary>
+    public NpcBuilder AsCrafter(string specialty)
+    {
+        _character.CanCraft = true;
+        _character.CraftingSpecialty = specialty;
+        return this;
+    }
+
+    /// <summary>
+    /// Add a known recipe to this NPC's crafting repertoire.
+    /// </summary>
+    public NpcBuilder WithRecipe(string recipeId)
+    {
+        _character.CanCraft = true;
+        _character.KnownRecipes.Add(recipeId);
+        return this;
+    }
+
+    /// <summary>
+    /// Add multiple known recipes.
+    /// </summary>
+    public NpcBuilder WithRecipes(params string[] recipeIds)
+    {
+        _character.CanCraft = true;
+        _character.KnownRecipes.AddRange(recipeIds);
+        return this;
+    }
+
+    /// <summary>
+    /// Add a quest this NPC can offer.
+    /// </summary>
+    public NpcBuilder OffersQuest(string questId)
+    {
+        _character.OfferedQuests.Add(questId);
+        return this;
+    }
+
+    /// <summary>
+    /// Allow this NPC to dynamically offer jobs.
+    /// </summary>
+    public NpcBuilder CanOfferDynamicJobs()
+    {
+        _character.CanOfferJobs = true;
         return this;
     }
 

@@ -120,11 +120,13 @@ Player Input → Step 1: LLM Decides Actions → Step 2: Execute Game Logic → 
 
 ### Game Definition System
 Games are created using GameBuilder (fluent pattern) and consist of:
-- **Rooms** with exits (bidirectional connections)
-- **NPCs** with basic stats and optional personality prompts
-- **Items** (weapons, armor, consumables, teleportation)
-- **Quests** (tracked in GameState, not yet fully integrated)
+- **Rooms** with exits (bidirectional connections) and optional resources/biomes
+- **NPCs** with stats, personality prompts, crafting abilities, and quest offerings
+- **Items** (weapons, armor, consumables, crafting materials, treasure, tools)
+- **Quests** (structured requirements with progress tracking)
+- **Crafting Recipes** (NPC crafters can forge items from materials)
 - **Game Metadata** (title, style, objective, feature flags)
+- **Game Master Authority** (controls LLM creative freedom)
 
 Example: FantasyQuest is defined in src/Games/FantasyQuest.cs using GameBuilder to configure the entire game world.
 
@@ -157,6 +159,11 @@ Example: FantasyQuest is defined in src/Games/FantasyQuest.cs using GameBuilder 
   - **HandleInventory/Look/Examine**: Direct game state queries; shows dead NPC indicator and loot
   - **HandleUse**: Supports teleportation items and consumables with effects
   - **HandleTake/Drop**: Item management; can loot from dead NPCs
+  - **HandleBuy/Sell/Shop**: Economy commands for trading with merchants
+  - **HandleGatherAsync**: Resource gathering with defined or dynamic resources
+  - **HandleCraft**: Request NPC crafting with material/cost validation
+  - **HandleRecipes**: View available crafting recipes from NPCs
+  - **HandleQuests**: View quest log with progress tracking
 - **NarrateWithResultsAsync**: Creates narrative based on actual execution results
 - **Fallback Parser**: TryParseFallback handles common commands without LLM (emergency fallback)
 
@@ -168,9 +175,110 @@ Example: FantasyQuest is defined in src/Games/FantasyQuest.cs using GameBuilder 
 ### Inventory & Loot System
 - Player inventory is a separate Inventory class with item stacking (InventoryItem tracks quantity)
 - NPCs can carry items in CarriedItems dictionary (for looting when defeated)
-- Items persist in rooms until taken (ItemType: Weapon, Armor, Consumable, Utility)
+- Items persist in rooms until taken
+- **Item Types**: Weapon, Armor, Consumable, Key, Teleportation, QuestItem, CraftingMaterial, Treasure, Junk, Tool
 - Can examine dead NPCs to see available loot items
 - Take action transfers items from NPC body to player inventory
+
+### Economy System
+The game supports an optional economy system with two modes:
+
+**Tiered Economy** (Platinum/Gold/Silver):
+- 100 silver = 1 gold, 100 gold = 1 platinum
+- Classic fantasy RPG currency
+- Example: `.WithTieredEconomy(startingGold: 10, startingSilver: 50)`
+
+**Simple Economy** (Single Currency):
+- One currency type (credits, bottlecaps, coins, etc.)
+- Customizable name and symbol
+- Example: `.WithSimpleEconomy("Credits", "💰", startingCurrency: 100)`
+
+**Economy Features**:
+- Merchants (NPCRole.Merchant) can buy/sell items with `shop`, `buy [item]`, `sell [item]` commands
+- Items have buy price (full value) and sell price (half value by default)
+- Characters have Wallet for currency storage
+- Currency is looted automatically when defeating enemies
+- Item prices displayed when examining items
+- Merchants shown with 🛒 indicator
+
+**Disabling Economy**:
+- Use `.WithoutEconomy()` or simply don't configure economy (disabled by default)
+- Sci-Fi Adventure example: survival scenario with no trading
+
+### Game Master Authority System
+Controls how much creative freedom the LLM Game Master has:
+
+**Authority Levels**:
+- `Strict()` - GM can only use predefined content (good for puzzles, tightly designed games)
+- `Balanced()` - Some creative freedom (can find resources contextually, NPCs can offer jobs)
+- `Dynamic()` - GM can create quests, items, recipes on the fly
+- `OpenWorld()` - Full creative freedom (pure roleplay, experimental games)
+
+**Configurable Permissions**:
+- `CanCreateItems` - Invent items not in the game definition
+- `CanCreateQuests` - Generate quests from NPC conversations
+- `CanDecideResources` - Determine if resources exist based on room context
+- `CanCreateRecipes` - Offer custom crafting dynamically
+- `CanCreateJobs` - NPCs can offer repeatable tasks
+- `CanCreateNPCs` - Introduce new characters
+- `CanModifyEnvironment` - Add weather, time-of-day effects
+- `NarrationCreativity` - 0-100 scale for narrative embellishment
+
+### Crafting System
+Allows NPCs (and optionally players) to create items from materials.
+
+**Recipe Definition**:
+```csharp
+var recipe = new CraftingRecipe {
+    Id = "forge_sword",
+    OutputItemId = "steel_sword",
+    Ingredients = new() { 
+        new RecipeIngredient { ItemId = "iron_ore", Quantity = 3 } 
+    },
+    CraftingSpecialty = "blacksmith",
+    CraftingCost = 25  // Currency cost for NPC crafting
+};
+```
+
+**NPC Crafters**:
+- Set `CanCraft = true` and `CraftingSpecialty = "blacksmith"` on NPCs
+- NPCs can craft any recipe matching their specialty
+- Use `CanOfferDynamicJobs()` to let NPCs generate gathering quests
+
+### Resource Gathering System
+Rooms can have gatherable resources (ore, herbs, etc.):
+
+**Room Configuration**:
+```csharp
+var cave = new RoomBuilder("mine")
+    .WithBiome(Biomes.Cave)
+    .WithResourceTags("ore", "gems", "minerals")
+    .AddGatherableResource("iron_ore", findChance: 60, minQty: 1, maxQty: 3)
+    .Build();
+```
+
+**Item Types for Materials**:
+- `CraftingMaterial` - Ore, herbs, wood (for crafting)
+- `Treasure` - Gems, gold bars (only for selling)
+- `Junk` - Low-value flavor items
+- `Tool` - Pickaxe, herbalist kit (enables gathering)
+
+### Quest System (Enhanced)
+Quests now support structured requirements and multiple types:
+
+**Quest Types**: Story, SideQuest, Job (repeatable), CraftingOrder, Bounty, Escort, Exploration, Delivery
+
+**Structured Requirements**:
+```csharp
+quest.Requirements = new() {
+    new QuestRequirement { Type = "item", TargetId = "moonpetal", Quantity = 5 },
+    new QuestRequirement { Type = "kill", TargetId = "goblin", Quantity = 3 }
+};
+```
+
+**Dynamic Quests**: 
+- NPCs with `CanOfferJobs = true` can generate quests based on their needs
+- GM can create quests if `Authority.CanCreateQuests = true`
 
 ### Chat Message Format
 All LLM calls use structured ChatMessage objects with Role/Content pairs. OllamaClient.ChatAsync wraps messages in OllamaChatRequest before posting to `/api/chat` endpoint.
@@ -258,7 +366,44 @@ var npc = new NpcBuilder("npc_id", "NPC Name")
     .WithStats(strength: 12, agility: 11, armor: 2)
     .WithHealth(30, 30)
     .WithLoot(sword, 1)
+    .WithCurrency(500)  // Simple economy currency
+    .WithTieredCurrency(gold: 10, silver: 50)  // Tiered economy currency
     .WithPersonalityPrompt("Your custom NPC personality...")
+    .Build();
+```
+
+### Setting Up Economy
+```csharp
+// Option 1: Tiered economy (platinum/gold/silver)
+gameBuilder.WithTieredEconomy(
+    platinumName: "Platinum",
+    goldName: "Gold", 
+    silverName: "Silver",
+    conversionRate: 100,  // 100 silver = 1 gold, 100 gold = 1 platinum
+    startingGold: 10,
+    startingSilver: 50);
+
+// Option 2: Simple economy (single currency)
+gameBuilder.WithSimpleEconomy(
+    currencyName: "Credits",
+    symbol: "💰",
+    startingCurrency: 100);
+
+// Option 3: No economy
+gameBuilder.WithoutEconomy();
+
+// Setting up a merchant NPC
+var merchant = new NpcBuilder("merchant", "Shop Keeper")
+    .WithTieredCurrency(gold: 50)  // Merchant needs money to buy from players
+    .WithLoot(ironSword, 2)  // Items for sale
+    .WithLoot(healthPotion, 10)
+    .Build();
+merchant.Role = NPCRole.Merchant;  // IMPORTANT: Mark as merchant
+
+// Item pricing (optional - defaults to Value field)
+var expensiveItem = new ItemBuilder("rare_sword")
+    .WithPricing(basePrice: 200, buyMultiplier: 1.2, sellMultiplier: 0.4)
+    .NotBuyable()  // Quest reward only
     .Build();
 ```
 
