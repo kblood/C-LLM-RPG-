@@ -23,7 +23,6 @@ namespace RPGGameEditor
 
         // UI controls we need to access
         private TreeView _treeView;
-        private TabControl _tabControl;
 
         public GameEditorForm()
         {
@@ -66,16 +65,7 @@ namespace RPGGameEditor
             helpMenu.DropDownItems.Add("&About", null, ShowAbout);
             menuStrip.Items.Add(helpMenu);
 
-            // Create SplitContainer for main content area
-            var splitContainer = new SplitContainer
-            {
-                Dock = DockStyle.Fill,
-                Orientation = Orientation.Vertical,
-                SplitterDistance = 300,
-                SplitterWidth = 5
-            };
-
-            // Left panel: TreeView for game structure
+            // TreeView for game structure (full width)
             _treeView = new TreeView
             {
                 Dock = DockStyle.Fill
@@ -90,23 +80,10 @@ namespace RPGGameEditor
             contextMenu.Items.Add("Edit", null, (s, e) => EditSelected());
             contextMenu.Items.Add("Delete", null, (s, e) => DeleteSelected());
             _treeView.ContextMenuStrip = contextMenu;
-
-            splitContainer.Panel1.Controls.Add(_treeView);
-
-            // Right panel: TabControl for editing
-            _tabControl = new TabControl
-            {
-                Dock = DockStyle.Fill
-            };
-            _tabControl.TabPages.Add("Game Info");
-            _tabControl.TabPages.Add("Rooms");
-            _tabControl.TabPages.Add("NPCs");
-            _tabControl.TabPages.Add("Items");
-            _tabControl.TabPages.Add("Quests");
-            splitContainer.Panel2.Controls.Add(_tabControl);
+            _treeView.DoubleClick += (s, e) => EditSelected();
 
             // Add controls to form in correct order
-            this.Controls.Add(splitContainer);
+            this.Controls.Add(_treeView);
             this.Controls.Add(menuStrip);
         }
 
@@ -415,12 +392,47 @@ namespace RPGGameEditor
         private void EditSelected()
         {
             if (_treeView.SelectedNode == null || _treeView.SelectedNode.Tag == null)
-            {
-                MessageBox.Show("Please select an item to edit.");
-                return;
-            }
+                return; // Nothing selected or category node selected
 
-            MessageBox.Show("Edit functionality not yet implemented.");
+            var tag = _treeView.SelectedNode.Tag;
+
+            if (tag is RoomDefinition room)
+            {
+                var dialog = new RoomEditorDialog(room);
+                if (dialog.ShowDialog() == DialogResult.OK)
+                {
+                    var index = _rooms.IndexOf(room);
+                    if (index >= 0)
+                        _rooms[index] = dialog.CreatedRoom;
+                    UpdateUI();
+                }
+            }
+            else if (tag is NpcDefinition npc)
+            {
+                var dialog = new NpcEditorDialog(npc);
+                if (dialog.ShowDialog() == DialogResult.OK)
+                {
+                    var index = _npcs.IndexOf(npc);
+                    if (index >= 0)
+                        _npcs[index] = dialog.CreatedNpc;
+                    UpdateUI();
+                }
+            }
+            else if (tag is ItemDefinition item)
+            {
+                var dialog = new ItemEditorDialog(item);
+                if (dialog.ShowDialog() == DialogResult.OK)
+                {
+                    var index = _items.IndexOf(item);
+                    if (index >= 0)
+                        _items[index] = dialog.CreatedItem;
+                    UpdateUI();
+                }
+            }
+            else if (tag is QuestDefinition quest)
+            {
+                MessageBox.Show("Quest editing not yet implemented.");
+            }
         }
 
         private void DeleteSelected()
@@ -660,6 +672,15 @@ namespace RPGGameEditor
             InitializeDialog();
         }
 
+        public RoomEditorDialog(RoomDefinition room)
+        {
+            InitializeDialog();
+            // Pre-fill with existing data
+            roomIdTextBox.Text = room.Id;
+            roomNameTextBox.Text = room.Name;
+            roomDescriptionTextBox.Text = room.Description ?? "";
+        }
+
         private void InitializeDialog()
         {
             this.Text = "Edit Room";
@@ -751,6 +772,20 @@ namespace RPGGameEditor
         public NpcEditorDialog()
         {
             InitializeDialog();
+        }
+
+        public NpcEditorDialog(NpcDefinition npc)
+        {
+            InitializeDialog();
+            // Pre-fill with existing data
+            npcIdTextBox.Text = npc.Id;
+            npcNameTextBox.Text = npc.Name;
+            npcTitleTextBox.Text = npc.Title ?? "";
+            npcDescriptionTextBox.Text = npc.Description ?? "";
+            healthTextBox.Text = npc.Stats?.Health.ToString() ?? "60";
+            strengthTextBox.Text = npc.Stats?.Strength.ToString() ?? "10";
+            agilityTextBox.Text = npc.Stats?.Agility.ToString() ?? "10";
+            armorTextBox.Text = npc.Stats?.Armor.ToString() ?? "0";
         }
 
         private void InitializeDialog()
@@ -994,6 +1029,22 @@ namespace RPGGameEditor
         public ItemEditorDialog()
         {
             InitializeDialog();
+        }
+
+        public ItemEditorDialog(ItemDefinition item)
+        {
+            InitializeDialog();
+            // Pre-fill with existing data
+            itemIdTextBox.Text = item.Id;
+            itemNameTextBox.Text = item.Name;
+            itemDescriptionTextBox.Text = item.Description ?? "";
+            typeComboBox.SelectedItem = item.Type ?? "misc";
+            damageTextBox.Text = item.Metadata?.ContainsKey("damage") == true
+                ? item.Metadata["damage"].ToString() ?? "0"
+                : "0";
+            armorBonusTextBox.Text = item.Metadata?.ContainsKey("armorBonus") == true
+                ? item.Metadata["armorBonus"].ToString() ?? "0"
+                : "0";
         }
 
         private void InitializeDialog()
