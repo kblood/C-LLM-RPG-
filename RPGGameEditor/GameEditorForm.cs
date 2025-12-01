@@ -69,18 +69,22 @@ namespace RPGGameEditor
             this.MainMenuStrip = _menuStrip;
             this.Controls.Add(_menuStrip);
 
+            // Create a container panel that will hold the split container
+            // This ensures proper docking with the menu strip
+            var containerPanel = new Panel
+            {
+                Dock = DockStyle.Fill,
+                Name = "ContainerPanel"
+            };
+
             // Create split container for main content
-            // IMPORTANT: Don't use Dock = Fill for controls alongside MenuStrip
-            // MenuStrip docks automatically at top, so we need to fill the remaining space
             _mainPanel = new SplitContainer
             {
                 Orientation = Orientation.Vertical,
                 SplitterDistance = 250,
                 SplitterWidth = 4,
-                Name = "MainSplitContainer",
-                // Explicitly set anchor to fill available space (below menu)
-                Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
-                Location = new System.Drawing.Point(0, 0)
+                Dock = DockStyle.Fill,
+                Name = "MainSplitContainer"
             };
 
             // Left panel - TreeView
@@ -105,7 +109,9 @@ namespace RPGGameEditor
 
             _mainPanel.Panel2.Controls.Add(_tabControl);
 
-            this.Controls.Add(_mainPanel);
+            containerPanel.Controls.Add(_mainPanel);
+            this.Controls.Add(containerPanel);
+
             this.ResumeLayout(false);
             this.PerformLayout();
         }
