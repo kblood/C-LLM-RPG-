@@ -31,8 +31,24 @@ dotnet run replay
 ```
 Automatically plays both games using randomized player actions, generates markdown logs for verification and testing.
 
+### Run WinForms Room Designer/Editor
+```bash
+dotnet run --project RPGGameEditor/RPGGameEditor.csproj
+```
+Launches a visual Windows Forms application for creating and editing game worlds without writing code. Allows you to:
+- Create, edit, and delete rooms
+- Add and manage exits between rooms
+- Assign NPCs to rooms
+- Edit room metadata and properties
+- Save/load world data as JSON files
+
+For detailed usage instructions, see `ROOM_DESIGNER_QUICKSTART.md`.
+
 ### Project Structure
 - **Program.cs** - Entry point with interactive and replay modes
+- **RPGGameEditor/** - Windows Forms application for visual game world editing
+  - **GameEditorForm.cs** - Main editor UI for creating/editing rooms, NPCs, exits, and metadata
+  - **Program.cs** - WinForms entry point
 - **src/Core/GameState.cs** - Central game state management
 - **src/Services/GameMaster.cs** - Main orchestration service (two-step action system: decide → execute → narrate)
 - **src/Services/CombatService.cs** - Combat resolution system with hit/damage/flee mechanics
@@ -142,6 +158,16 @@ All LLM calls use structured ChatMessage objects with Role/Content pairs. Ollama
 - InCombatMode flag ensures game state is properly maintained during fights
 
 ## Development Guidelines
+
+### Using the Room Designer/Editor
+The WinForms Room Designer (`RPGGameEditor`) provides a visual interface for world building:
+1. Launch: `dotnet run --project RPGGameEditor/RPGGameEditor.csproj`
+2. Create rooms, exits, and assign NPCs without coding
+3. Save world data as JSON files (e.g., `world_data.json`)
+4. Load these files back into the editor for iteration
+5. Use JSON files as templates for programmatic game definitions
+
+See `ROOM_DESIGNER_QUICKSTART.md` for complete usage guide.
 
 ### Adding New Game Actions
 1. Create handler method in GameMaster: `private ActionResult Handle[Action](...)`
