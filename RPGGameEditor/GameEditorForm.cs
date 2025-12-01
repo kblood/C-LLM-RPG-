@@ -15,21 +15,39 @@ namespace RPGGameEditor
         private string _currentGamePath = "";
         private readonly string _gamesDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "games");
 
+        private MenuStrip _menuStrip;
+        private TreeView _gameTreeView;
+        private TabControl _tabControl;
+        private SplitContainer _mainPanel;
+
         public GameEditorForm()
         {
             InitializeComponent();
-            this.Text = "RPG Game Editor";
-            this.Size = new System.Drawing.Size(1200, 800);
-            this.StartPosition = FormStartPosition.CenterScreen;
-            SetupMenuBar();
-            SetupUI();
+            ConfigureForm();
+            CreateControls();
+            this.Load += (s, e) => OnFormLoad();
+        }
+
+        private void OnFormLoad()
+        {
             LoadGameList();
         }
 
-        private void SetupMenuBar()
+        private void ConfigureForm()
         {
-            var menuStrip = new MenuStrip();
+            this.Text = "RPG Game Editor";
+            this.Width = 1200;
+            this.Height = 800;
+            this.StartPosition = FormStartPosition.CenterScreen;
+            this.AutoScaleMode = AutoScaleMode.Font;
+            this.MinimumSize = new System.Drawing.Size(600, 400);
+            this.SuspendLayout();
+        }
 
+        private void CreateControls()
+        {
+            // Create menu strip FIRST
+            _menuStrip = new MenuStrip();
             var fileMenu = new ToolStripMenuItem("&File");
             fileMenu.DropDownItems.Add("&New Game", null, NewGame_Click);
             fileMenu.DropDownItems.Add("&Open Game", null, OpenGame_Click);
@@ -37,56 +55,55 @@ namespace RPGGameEditor
             fileMenu.DropDownItems.Add("&Save As", null, SaveGameAs_Click);
             fileMenu.DropDownItems.Add(new ToolStripSeparator());
             fileMenu.DropDownItems.Add("E&xit", null, (s, e) => this.Close());
-            menuStrip.Items.Add(fileMenu);
+            _menuStrip.Items.Add(fileMenu);
 
             var editMenu = new ToolStripMenuItem("&Edit");
             editMenu.DropDownItems.Add("&Game Properties", null, EditGameProperties_Click);
-            menuStrip.Items.Add(editMenu);
+            _menuStrip.Items.Add(editMenu);
 
             var helpMenu = new ToolStripMenuItem("&Help");
             helpMenu.DropDownItems.Add("&About", null, (s, e) =>
                 MessageBox.Show("RPG Game Editor v1.0\n\nCreate and edit JSON-based RPG games.", "About"));
-            menuStrip.Items.Add(helpMenu);
+            _menuStrip.Items.Add(helpMenu);
 
-            this.MainMenuStrip = menuStrip;
-            this.Controls.Add(menuStrip);
-        }
+            this.MainMenuStrip = _menuStrip;
+            this.Controls.Add(_menuStrip);
 
-        private void SetupUI()
-        {
-            // Create main layout with 2 columns
-            var mainPanel = new SplitContainer
+            // Create split container for main content
+            _mainPanel = new SplitContainer
             {
                 Dock = DockStyle.Fill,
                 Orientation = Orientation.Vertical,
-                SplitterDistance = 250
+                SplitterDistance = 250,
+                SplitterWidth = 4,
+                Name = "MainSplitContainer"
             };
 
-            // Left panel - Game structure tree
-            var gameTreeView = new TreeView
+            // Left panel - TreeView
+            _gameTreeView = new TreeView
             {
                 Dock = DockStyle.Fill,
                 Name = "GameTreeView"
             };
-            mainPanel.Panel1.Controls.Add(gameTreeView);
+            _mainPanel.Panel1.Controls.Add(_gameTreeView);
 
-            // Right panel - Details/editor with tabs
-            var tabControl = new TabControl
+            // Right panel - TabControl
+            _tabControl = new TabControl
             {
                 Dock = DockStyle.Fill,
                 Name = "EditorTabs"
             };
+            _tabControl.TabPages.Add(new TabPage("Game Info") { Name = "GameInfoTab" });
+            _tabControl.TabPages.Add(new TabPage("Rooms") { Name = "RoomsTab" });
+            _tabControl.TabPages.Add(new TabPage("NPCs") { Name = "NPCsTab" });
+            _tabControl.TabPages.Add(new TabPage("Items") { Name = "ItemsTab" });
+            _tabControl.TabPages.Add(new TabPage("Quests") { Name = "QuestsTab" });
 
-            // Add tabs for different elements
-            tabControl.TabPages.Add(new TabPage("Game Info") { Name = "GameInfoTab" });
-            tabControl.TabPages.Add(new TabPage("Rooms") { Name = "RoomsTab" });
-            tabControl.TabPages.Add(new TabPage("NPCs") { Name = "NPCsTab" });
-            tabControl.TabPages.Add(new TabPage("Items") { Name = "ItemsTab" });
-            tabControl.TabPages.Add(new TabPage("Quests") { Name = "QuestsTab" });
+            _mainPanel.Panel2.Controls.Add(_tabControl);
 
-            mainPanel.Panel2.Controls.Add(tabControl);
-
-            this.Controls.Add(mainPanel);
+            this.Controls.Add(_mainPanel);
+            this.ResumeLayout(false);
+            this.PerformLayout();
         }
 
         private void LoadGameList()
