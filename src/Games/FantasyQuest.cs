@@ -290,6 +290,8 @@ public static class FantasyQuest
         dragon.CurrentRoomId = "dragon_lair";
         dragon.Role = NPCRole.Boss;
         dragon.Description = "Infernus, the Dragon of Mount Infernus. Scales of molten gold. Eyes like burning embers.";
+        
+        // NOTE: Crown will be added after item definitions below
 
         gameBuilder
             .AddNPCs(blacksmith, townCrier, tavernKeeper, oldMage, merchant, apothecary, ranger, hermit, goblinKing, dragon);
@@ -506,6 +508,10 @@ public static class FantasyQuest
         apothecary.CarriedItems["health_potion"] = new InventoryItem { Item = healthPotion, Quantity = 10 };
         apothecary.CarriedItems["mana_potion"] = new InventoryItem { Item = manaPotion, Quantity = 5 };
         apothecary.Wallet.AddTiered(0, 25, 0);  // Apothecary has some gold too
+
+        // Give dragon the Crown of Amalion as loot (main quest item)
+        dragon.CarriedItems["crown_of_amalion"] = new InventoryItem { Item = crown, Quantity = 1 };
+        dragon.Wallet.AddTiered(10, 50, 75);  // Dragon has treasure hoard
         apothecary.Role = NPCRole.Merchant;  // Make apothecary a merchant too
 
         // ========== QUESTS ==========

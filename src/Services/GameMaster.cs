@@ -7,6 +7,16 @@ using CSharpRPGBackend.LLM;
 namespace CSharpRPGBackend.Services;
 
 /// <summary>
+/// Display modes for the game state footer shown after each action.
+/// </summary>
+public enum GameStateDisplayMode
+{
+    Minimal,      // Location, Health, Exits, NPCs only
+    Standard,     // Minimal + Currency and Inventory
+    Detailed      // Standard + additional context
+}
+
+/// <summary>
 /// The Game Master (GM) service orchestrates the game world, player actions, and LLM narration.
 /// It interprets free-text player commands, applies game logic, and narrates outcomes via LLM.
 /// </summary>
@@ -24,6 +34,7 @@ public class GameMaster
     private readonly CraftingConfig _crafting;  // Crafting configuration
     private readonly Random _random = new();  // For gathering rolls
     public bool DebugMode { get; set; } = false;  // Toggle for debug output
+    public GameStateDisplayMode DisplayMode { get; set; } = GameStateDisplayMode.Standard;  // Footer display mode
 
     public GameMaster(GameState gameState, OllamaClient ollamaClient, string? gmSystemPrompt = null, Game? game = null)
     {
@@ -81,6 +92,15 @@ public class GameMaster
             executionResults.Add((action.Action, result));
         }
 
+        // For informational commands (status, inventory, look, equipped, quests, recipes, shop, help, display), 
+        // return the result directly without narration or game state footer
+        var informationalCommands = new[] { "status", "inventory", "look", "equipped", "quests", "recipes", "shop", "help", "display" };
+        if (commandsToExecute.Count == 1 && informationalCommands.Contains(commandsToExecute[0].Action.ToLower()))
+        {
+            var result = executionResults[0].result;
+            return result.Success ? result.Message : $"❌ {result.Message}";
+        }
+
         // Step 3: Ask LLM to narrate based on original command + execution results
         var narration = await NarrateWithResultsAsync(playerCommand, commandsToExecute, executionResults);
 
@@ -134,32 +154,74 @@ public class GameMaster
         if (deadNpcs.Count > 0)
             npcsList += (npcsList.Length > 0 ? " | ☠️ " : "☠️ ") + string.Join(", ", deadNpcs);
 
-        var inventory = _gameState.PlayerInventory.Items.Count > 0
-            ? string.Join(", ", _gameState.PlayerInventory.Items.Values.Select(ii => $"{ii.Item.Name}"))
-            : "empty";
+        // Build inventory list with equipped indicators
+        string inventory;
+        if (_gameState.PlayerInventory.Items.Count > 0)
+        {
+            var equippedIds = _gameState.Player.EquipmentSlots.Values.Where(id => id != null).ToHashSet();
+            inventory = string.Join(", ", _gameState.PlayerInventory.Items.Values.Select(ii =>
+            {
+                bool isEquipped = equippedIds.Contains(ii.Item.Id);
+                string equippedIcon = isEquipped ? " ⚔️" : "";
+                return $"{ii.Item.Name}{equippedIcon}";
+            }));
+        }
+        else
+        {
+            inventory = "empty";
+        }
 
         var response = new StringBuilder();
         response.AppendLine(narration);
         response.AppendLine();
         response.AppendLine("---");
         response.AppendLine();
-        response.AppendLine($"📍 **Location:** {currentRoom.Name}");
-        response.AppendLine($"❤️ **Health:** {_gameState.Player.Health}/{_gameState.Player.MaxHealth}");
 
-        // Show currency if economy is enabled
-        if (_economy.Enabled)
+        // Always show location and health
+        response.AppendLine($"📍 **Location:** {currentRoom.Name}");
+        
+        // Health line - add combat stats in Detailed mode
+        if (DisplayMode == GameStateDisplayMode.Detailed)
+        {
+            // Calculate total combat stats
+            var equippedItems = new Dictionary<string, Item>();
+            foreach (var slot in _gameState.Player.EquipmentSlots)
+            {
+                if (slot.Value != null && _gameState.PlayerInventory.Items.TryGetValue(slot.Value, out var invItem))
+                {
+                    equippedItems[slot.Key] = invItem.Item;
+                }
+            }
+
+            int totalDamage = _gameState.Player.GetTotalDamage(equippedItems.Values.FirstOrDefault(i => i.DamageBonus > 0));
+            int totalArmor = _gameState.Player.GetTotalArmor(equippedItems);
+
+            response.AppendLine($"❤️ **Health:** {_gameState.Player.Health}/{_gameState.Player.MaxHealth} | ⚔️ **DMG:** {totalDamage} | 🛡️ **ARM:** {totalArmor}");
+        }
+        else
+        {
+            response.AppendLine($"❤️ **Health:** {_gameState.Player.Health}/{_gameState.Player.MaxHealth}");
+        }
+
+        // Standard and Detailed modes show currency if economy is enabled
+        if (DisplayMode >= GameStateDisplayMode.Standard && _economy.Enabled)
         {
             var currencyDisplay = _gameState.Player.Wallet.Format(_economy);
             response.AppendLine($"💰 **Currency:** {currencyDisplay}");
         }
 
+        // Always show exits and NPCs (part of minimal mode)
         if (exits.Count > 0)
             response.AppendLine($"🚪 **Exits:** {string.Join(", ", exits.Select(e => e.DisplayName))}");
 
         if (npcsList.Length > 0)
             response.AppendLine($"👥 **NPCs Here:** {npcsList}");
 
-        response.AppendLine($"🎒 **Inventory:** {inventory}");
+        // Standard and Detailed modes show inventory
+        if (DisplayMode >= GameStateDisplayMode.Standard)
+        {
+            response.AppendLine($"🎒 **Inventory:** {inventory}");
+        }
 
         return response.ToString();
     }
@@ -279,7 +341,12 @@ IMPORTANT: 'target' MUST contain the specific thing the player referred to:
 - For 'look' -> ""target"":""""
 - For 'inventory' -> ""target"":""""
 
-Valid actions: move, look, inventory, talk, follow, examine, take, drop, use, attack, give, equip, unequip, equipped, buy, sell, shop, gather, search, craft, recipes, quests, stop, status, help
+Valid actions: move, look, inventory, talk, follow, examine, take, drop, use, attack, give, equip, unequip, equipped, buy, sell, shop, gather, search, craft, recipes, quests, stop, status, display, help
+
+COMMAND MODIFIERS:
+- 'status' has optional target: empty = simple status (health, exits, NPCs), 'detailed'/'stats'/'advanced' = full combat stats
+- 'inventory' has optional target: empty = simple list, 'detailed'/'equipped' = show equipped items with ⚔️ icon
+- 'display' has optional target: 'minimal'/'standard'/'detailed' = changes footer display mode for all subsequent actions
 
 Rules:
 1. Return ONLY the JSON array - no explanation, no code blocks, no markdown
@@ -334,7 +401,13 @@ Player says 'look for herbs' -> [{""action"":""gather"",""target"":""herbs"",""d
 Player says 'forage for mushrooms' -> [{""action"":""gather"",""target"":""mushrooms"",""details"":""""}]
 Player says 'ask blacksmith to forge a sword' -> [{""action"":""craft"",""target"":""Gruff the Blacksmith"",""details"":""sword""}]
 Player says 'what can you craft' -> [{""action"":""recipes"",""target"":"""",""details"":""""}]
+Player says 'status' -> [{""action"":""status"",""target"":"""",""details"":""""}]
+Player says 'detailed status' OR 'stats' -> [{""action"":""status"",""target"":""detailed"",""details"":""""}]
+Player says 'inventory' -> [{""action"":""inventory"",""target"":"""",""details"":""""}]
+Player says 'detailed inventory' OR 'show equipped' -> [{""action"":""inventory"",""target"":""detailed"",""details"":""""}]
 Player says 'check my quests' -> [{""action"":""quests"",""target"":"""",""details"":""""}]
+Player says 'display minimal' OR 'minimal ui' -> [{""action"":""display"",""target"":""minimal"",""details"":""""}]
+Player says 'display standard' -> [{""action"":""display"",""target"":""standard"",""details"":""""}]
 
 []"
             },
@@ -625,7 +698,8 @@ CRITICAL RULES:
         {
             "=== Available Commands ===",
             "look - Examine your surroundings",
-            "inventory - Check your items",
+            "inventory - Check your items (simple list)",
+            "inventory detailed - Show items with equipped indicators ⚔️",
             "examine [item/npc] - Look closely at something",
             "go [direction] - Travel in a direction (natural language works!)",
             "talk [npc] - Speak with an NPC",
@@ -634,7 +708,14 @@ CRITICAL RULES:
             "take [item] - Pick up an item",
             "drop [item] - Drop an item from inventory",
             "attack [npc] - Attack an NPC (enters COMBAT MODE)",
-            "status - Show current game status",
+            "status - Show simple status (health, exits, NPCs)",
+            "status detailed - Show advanced stats (strength, agility, armor, bonuses)",
+            "",
+            "=== DISPLAY SETTINGS ===",
+            "display - Show current display mode",
+            "display minimal - Minimal footer (location, health, exits, NPCs)",
+            "display standard - Standard footer (adds currency and inventory)",
+            "display detailed - Shows combat stats (DMG/ARM) on health line",
             "",
         };
 
@@ -1227,7 +1308,7 @@ MATCHING STRATEGY:
         {
             "move" => HandleMove(plan.Target),
             "look" => HandleLook(),
-            "inventory" => HandleInventory(),
+            "inventory" => HandleInventory(plan.Target),
             "talk" => await HandleTalkAsync(plan.Target, string.IsNullOrEmpty(plan.Details) ? playerCommand : plan.Details),
             "follow" => await HandleFollowAsync(plan.Target),
             "examine" => HandleExamine(plan.Target, playerCommand),
@@ -1248,7 +1329,8 @@ MATCHING STRATEGY:
             "recipes" => HandleRecipes(plan.Target),
             "quests" => HandleQuests(),
             "help" => HandleHelp(),
-            "status" => HandleStatus(),
+            "status" => HandleStatus(plan.Target),
+            "display" => HandleDisplayMode(plan.Target),
             "unknown" => HandleUnknownAction(plan.Target),
             _ => new ActionResult { Success = false, Message = "I don't understand that action." }
         };
@@ -1383,14 +1465,37 @@ Action Result: {result.Message}";
         return new ActionResult { Success = true, Message = message };
     }
 
-    private ActionResult HandleInventory()
+    private ActionResult HandleInventory(string? mode = null)
     {
         if (_gameState.PlayerInventory.Items.Count == 0)
             return new ActionResult { Success = true, Message = "Your inventory is empty." };
 
-        var items = string.Join(", ",
-            _gameState.PlayerInventory.Items.Values.Select(i => $"{i.Item.Name} x{i.Quantity}"));
-        return new ActionResult { Success = true, Message = $"Inventory: {items}" };
+        // Check if equipped items indicator is requested
+        bool showEquipped = mode?.ToLower() == "equipped" || mode?.ToLower() == "detailed";
+
+        if (!showEquipped)
+        {
+            // Simple mode - just list items with quantities
+            var items = string.Join(", ",
+                _gameState.PlayerInventory.Items.Values.Select(i => $"{i.Item.Name} x{i.Quantity}"));
+            return new ActionResult { Success = true, Message = $"Inventory: {items}" };
+        }
+
+        // Detailed mode - show items with equipped indicator
+        var message = new StringBuilder();
+        message.AppendLine("Inventory:");
+
+        // Get equipped item IDs
+        var equippedIds = _gameState.Player.EquipmentSlots.Values.Where(id => id != null).ToHashSet();
+
+        foreach (var inv in _gameState.PlayerInventory.Items.Values)
+        {
+            bool isEquipped = equippedIds.Contains(inv.Item.Id);
+            string equippedIcon = isEquipped ? " ⚔️" : "";
+            message.AppendLine($"  • {inv.Item.Name} x{inv.Quantity}{equippedIcon}");
+        }
+
+        return new ActionResult { Success = true, Message = message.ToString() };
     }
 
     private async Task<ActionResult> HandleTalkAsync(string npcName, string playerQuestion)
@@ -1656,8 +1761,8 @@ RULES:
 
         var companionAssistance = _combatService.CalculateCompanionAssistance(companionCharacters);
 
-        // Resolve combat using CombatService
-        var combatResult = _combatService.ResolveAttack(_gameState.Player, npc);
+        // Resolve combat using CombatService (pass player inventory for equipment lookup)
+        var combatResult = _combatService.ResolveAttack(_gameState.Player, _gameState.PlayerInventory.Items, npc, null);
 
         var message = new StringBuilder();
         message.AppendLine(combatResult.Message);
@@ -1718,7 +1823,7 @@ RULES:
 
         // NPC counter-attacks!
         message.AppendLine($"\n{npc.Name} retaliates!");
-        var counterAttack = _combatService.ResolveAttack(npc, _gameState.Player);
+        var counterAttack = _combatService.ResolveAttack(npc, null, _gameState.Player, _gameState.PlayerInventory.Items);
         message.AppendLine(counterAttack.Message);
 
         if (counterAttack.WasHit)
@@ -2155,7 +2260,7 @@ RULES:
             message.Append($"You equip {item.Name}");
 
             // Mention if we unequipped something
-            if (previousItemId != null && _gameState.Player.CarriedItems.TryGetValue(previousItemId, out var prevItem))
+            if (previousItemId != null && _gameState.PlayerInventory.Items.TryGetValue(previousItemId, out var prevItem))
             {
                 message.Append($" (unequipped {prevItem.Item.Name})");
             }
@@ -2189,7 +2294,7 @@ RULES:
 
         foreach (var kvp in _gameState.Player.EquipmentSlots)
         {
-            if (kvp.Value != null && _gameState.Player.CarriedItems.TryGetValue(kvp.Value, out var inventoryItem))
+            if (kvp.Value != null && _gameState.PlayerInventory.Items.TryGetValue(kvp.Value, out var inventoryItem))
             {
                 if (inventoryItem.Item.Name.ToLower().Contains(targetLower))
                 {
@@ -2209,7 +2314,7 @@ RULES:
 
             if (matchedSlot != null && _gameState.Player.EquipmentSlots.TryGetValue(matchedSlot, out var itemId) && itemId != null)
             {
-                if (_gameState.Player.CarriedItems.TryGetValue(itemId, out var inventoryItem))
+                if (_gameState.PlayerInventory.Items.TryGetValue(itemId, out var inventoryItem))
                 {
                     slotToUnequip = matchedSlot;
                     itemToUnequip = inventoryItem.Item;
@@ -2242,7 +2347,7 @@ RULES:
         {
             if (_gameState.Player.EquipmentSlots.TryGetValue(slotDef.Id, out var itemId) && itemId != null)
             {
-                if (_gameState.Player.CarriedItems.TryGetValue(itemId, out var inventoryItem))
+                if (_gameState.PlayerInventory.Items.TryGetValue(itemId, out var inventoryItem))
                 {
                     var item = inventoryItem.Item;
                     var bonuses = new List<string>();
@@ -2276,7 +2381,7 @@ RULES:
             {
                 if (_gameState.Player.EquipmentSlots.TryGetValue(slotDef.Id, out var weaponId) && weaponId != null)
                 {
-                    equippedWeapon = _gameState.Player.CarriedItems.GetValueOrDefault(weaponId)?.Item;
+                    equippedWeapon = _gameState.PlayerInventory.Items.GetValueOrDefault(weaponId)?.Item;
                     if (equippedWeapon != null) break;
                 }
             }
@@ -2293,7 +2398,7 @@ RULES:
             {
                 if (_gameState.Player.EquipmentSlots.TryGetValue(slotDef.Id, out var armorItemId) && armorItemId != null)
                 {
-                    if (_gameState.Player.CarriedItems.TryGetValue(armorItemId, out var armorItem))
+                    if (_gameState.PlayerInventory.Items.TryGetValue(armorItemId, out var armorItem))
                     {
                         equippedArmorBonus += armorItem.Item.ArmorBonus;
                     }
@@ -3055,30 +3160,182 @@ Respond in JSON format only:
         return new ActionResult { Success = true, Message = GetAvailableActions() };
     }
 
-    private ActionResult HandleStatus()
+    private ActionResult HandleDisplayMode(string? mode)
+    {
+        var modeLower = mode?.ToLower() ?? "";
+
+        // Check if showing current mode
+        if (string.IsNullOrWhiteSpace(mode))
+        {
+            return new ActionResult 
+            { 
+                Success = true, 
+                Message = $"Current display mode: {DisplayMode}\n\nAvailable modes:\n• minimal - Location, health, exits, NPCs only\n• standard - Adds currency and inventory\n• detailed - Adds combat stats (DMG/ARM) on health line"
+            };
+        }
+
+        // Try to parse the mode
+        GameStateDisplayMode? newMode = modeLower switch
+        {
+            "minimal" or "min" or "simple" => GameStateDisplayMode.Minimal,
+            "standard" or "normal" or "default" => GameStateDisplayMode.Standard,
+            "detailed" or "full" or "verbose" => GameStateDisplayMode.Detailed,
+            _ => null  // Invalid mode
+        };
+
+        // If mode was not recognized
+        if (newMode == null)
+        {
+            return new ActionResult 
+            { 
+                Success = false, 
+                Message = $"Invalid mode '{mode}'. Use: minimal, standard, or detailed"
+            };
+        }
+
+        // Change the mode
+        DisplayMode = newMode.Value;
+        return new ActionResult 
+        { 
+            Success = true, 
+            Message = $"Display mode changed to: {DisplayMode}"
+        };
+    }
+
+    private ActionResult HandleStatus(string? mode = null)
     {
         if (_gameState.InCombatMode)
         {
             return new ActionResult { Success = true, Message = GetCombatStatus() };
         }
-        else
+
+        var currentRoom = _gameState.GetCurrentRoom();
+        var message = new StringBuilder();
+        
+        // Determine display mode: simple, detailed, or full
+        string displayMode = mode?.ToLower() ?? "simple";
+        
+        if (displayMode == "detailed" || displayMode == "full" || displayMode == "advanced" || displayMode == "stats")
         {
-            var currentRoom = _gameState.GetCurrentRoom();
-            var message = new StringBuilder();
-            message.AppendLine($"Location: {currentRoom.Name}");
-            message.AppendLine($"Health: {_gameState.Player.Health}/{_gameState.Player.MaxHealth}");
-            message.AppendLine($"Level: {_gameState.Player.Level}");
-            message.AppendLine($"Experience: {_gameState.Player.Experience}");
+            // Advanced status with detailed stats
+            message.AppendLine("═══════════════════════════════════");
+            message.AppendLine($"📍 Location: {currentRoom.Name}");
+            message.AppendLine($"❤️  Health: {_gameState.Player.Health}/{_gameState.Player.MaxHealth}");
+            message.AppendLine();
+            
+            // Calculate equipped bonuses
+            var equippedItems = new Dictionary<string, Item>();
+            foreach (var slot in _gameState.Player.EquipmentSlots)
+            {
+                if (slot.Value != null && _gameState.PlayerInventory.Items.TryGetValue(slot.Value, out var invItem))
+                {
+                    equippedItems[slot.Key] = invItem.Item;
+                }
+            }
+
+            int equipmentDamage = equippedItems.Values.Sum(i => i.DamageBonus);
+            int equipmentArmor = equippedItems.Values.Sum(i => i.ArmorBonus);
+            
+            // Base stats
+            int baseStrength = _gameState.Player.Strength;
+            int baseAgility = _gameState.Player.Agility;
+            int baseArmor = _gameState.Player.Armor;
+            
+            // Total stats (base + equipment)
+            int totalDamage = _gameState.Player.GetTotalDamage(equippedItems.Values.FirstOrDefault(i => i.DamageBonus > 0));
+            int totalArmor = _gameState.Player.GetTotalArmor(equippedItems);
+            
+            message.AppendLine("⚔️  Combat Stats:");
+            message.AppendLine($"   Strength: {baseStrength} (Base Damage: {5 + (baseStrength - 10) / 2})");
+            message.AppendLine($"   Agility: {baseAgility} (Crit: +{Math.Max(0, baseAgility - 10)}%, Dodge: +{Math.Max(0, (baseAgility - 10) * 0.5):F1}%)");
+            message.AppendLine($"   Base Armor: {baseArmor}");
+            
+            if (equipmentDamage > 0 || equipmentArmor > 0)
+            {
+                message.AppendLine();
+                message.AppendLine("🛡️  Equipment Bonuses:");
+                if (equipmentDamage > 0)
+                    message.AppendLine($"   Weapon Damage: +{equipmentDamage}");
+                if (equipmentArmor > 0)
+                    message.AppendLine($"   Armor Rating: +{equipmentArmor}");
+                message.AppendLine();
+                message.AppendLine($"💪 Total Damage: {totalDamage}");
+                message.AppendLine($"🛡️  Total Armor: {totalArmor}");
+            }
+
+            message.AppendLine();
+            message.AppendLine($"⭐ Level: {_gameState.Player.Level} | XP: {_gameState.Player.Experience}");
 
             // Show currency if economy is enabled
             if (_economy.Enabled)
             {
                 var currencyDisplay = _gameState.Player.Wallet.Format(_economy);
-                message.AppendLine($"Currency: {currencyDisplay}");
+                message.AppendLine($"💰 Currency: {currencyDisplay}");
             }
 
-            return new ActionResult { Success = true, Message = message.ToString() };
+            // Show exits
+            var exits = currentRoom.GetAvailableExits();
+            if (exits.Count > 0)
+            {
+                message.AppendLine();
+                message.AppendLine("🚪 Exits: " + string.Join(", ", exits.Select(e => e.DisplayName)));
+            }
+
+            // Show NPCs
+            if (currentRoom.NPCIds.Count > 0)
+            {
+                var npcNames = currentRoom.NPCIds
+                    .Where(id => _gameState.NPCs.ContainsKey(id))
+                    .Select(id =>
+                    {
+                        var npc = _gameState.NPCs[id];
+                        string deathMarker = npc.IsAlive ? "" : " ☠️";
+                        return npc.Name + deathMarker;
+                    })
+                    .ToList();
+
+                if (npcNames.Count > 0)
+                {
+                    message.AppendLine("👥 NPCs: " + string.Join(", ", npcNames));
+                }
+            }
+            
+            message.AppendLine("═══════════════════════════════════");
         }
+        else
+        {
+            // Simple status - just health, exits, and NPCs
+            message.AppendLine($"📍 {currentRoom.Name}");
+            message.AppendLine($"❤️  Health: {_gameState.Player.Health}/{_gameState.Player.MaxHealth}");
+            
+            // Show exits
+            var exits = currentRoom.GetAvailableExits();
+            if (exits.Count > 0)
+            {
+                message.AppendLine("🚪 Exits: " + string.Join(", ", exits.Select(e => e.DisplayName)));
+            }
+
+            // Show NPCs
+            if (currentRoom.NPCIds.Count > 0)
+            {
+                var npcNames = currentRoom.NPCIds
+                    .Where(id => _gameState.NPCs.ContainsKey(id))
+                    .Select(id =>
+                    {
+                        var npc = _gameState.NPCs[id];
+                        string deathMarker = npc.IsAlive ? "" : " ☠️";
+                        return npc.Name + deathMarker;
+                    })
+                    .ToList();
+
+                if (npcNames.Count > 0)
+                {
+                    message.AppendLine("👥 NPCs: " + string.Join(", ", npcNames));
+                }
+            }
+        }
+
+        return new ActionResult { Success = true, Message = message.ToString() };
     }
 
     private ActionResult HandleStopCombat()
@@ -3108,7 +3365,7 @@ Respond in JSON format only:
             // Failed to flee - NPC counter-attacks!
             message.AppendLine();
             message.AppendLine($"{npc.Name} seizes the opportunity to attack!");
-            var counterAttack = _combatService.ResolveAttack(npc, _gameState.Player);
+            var counterAttack = _combatService.ResolveAttack(npc, null, _gameState.Player, _gameState.PlayerInventory.Items);
             message.AppendLine(counterAttack.Message);
 
             if (counterAttack.WasHit)

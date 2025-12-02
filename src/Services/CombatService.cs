@@ -28,6 +28,15 @@ public class CombatService
     /// </summary>
     public CombatResult ResolveAttack(Character attacker, Character defender)
     {
+        return ResolveAttack(attacker, null, defender, null);
+    }
+
+    /// <summary>
+    /// Resolves an attack with explicit inventory dictionaries for player characters.
+    /// </summary>
+    public CombatResult ResolveAttack(Character attacker, Dictionary<string, InventoryItem>? attackerInventory, 
+                                      Character defender, Dictionary<string, InventoryItem>? defenderInventory)
+    {
         var result = new CombatResult();
 
         // Check if attack hits or is dodged
@@ -41,7 +50,7 @@ public class CombatService
         }
 
         // Calculate base damage from attacker (including equipped weapon)
-        Item? equippedWeapon = GetEquippedWeapon(attacker);
+        Item? equippedWeapon = GetEquippedWeapon(attacker, attackerInventory);
         int baseDamage = attacker.GetTotalDamage(equippedWeapon);
 
         // Check for critical hit
@@ -53,7 +62,7 @@ public class CombatService
         }
 
         // Apply armor reduction - use defender's armor stat plus equipped armor
-        int defenderArmorRating = GetTotalArmor(defender);
+        int defenderArmorRating = GetTotalArmor(defender, defenderInventory);
         int armorReduction = CalculateArmorReduction(defenderArmorRating);
         int finalDamage = Math.Max(1, baseDamage - armorReduction); // Minimum 1 damage gets through
 
@@ -111,16 +120,17 @@ public class CombatService
 
     /// <summary>
     /// Get the equipped weapon for a character, if any.
-    /// Looks up the actual item from the character's carried items.
+    /// Looks up the actual item from the character's carried items or provided inventory.
     /// </summary>
-    private Item? GetEquippedWeapon(Character character)
+    private Item? GetEquippedWeapon(Character character, Dictionary<string, InventoryItem>? inventory = null)
     {
         // Check if main_hand slot has an item ID equipped
         if (!character.EquipmentSlots.TryGetValue("main_hand", out var itemId) || itemId == null)
             return null;
 
-        // Look up the actual Item from the character's carried items
-        if (character.CarriedItems.TryGetValue(itemId, out var inventoryItem))
+        // Use provided inventory if available, otherwise use character's carried items
+        var itemSource = inventory ?? character.CarriedItems;
+        if (itemSource.TryGetValue(itemId, out var inventoryItem))
             return inventoryItem.Item;
 
         return null;
@@ -128,19 +138,20 @@ public class CombatService
 
     /// <summary>
     /// Get all equipped armor items for a character.
-    /// Looks up actual items from the character's carried items.
+    /// Looks up actual items from the character's carried items or provided inventory.
     /// </summary>
-    private Dictionary<string, Item> GetEquippedArmorItems(Character character)
+    private Dictionary<string, Item> GetEquippedArmorItems(Character character, Dictionary<string, InventoryItem>? inventory = null)
     {
         var armorItems = new Dictionary<string, Item>();
         var armorSlots = new[] { "head", "chest", "hands", "legs", "feet" };
+        var itemSource = inventory ?? character.CarriedItems;
 
         foreach (var slot in armorSlots)
         {
             if (character.EquipmentSlots.TryGetValue(slot, out var itemId) && itemId != null)
             {
-                // Look up the actual Item from carried items
-                if (character.CarriedItems.TryGetValue(itemId, out var inventoryItem))
+                // Look up the actual Item from inventory
+                if (itemSource.TryGetValue(itemId, out var inventoryItem))
                 {
                     armorItems[slot] = inventoryItem.Item;
                 }
@@ -153,12 +164,12 @@ public class CombatService
     /// <summary>
     /// Calculate total armor rating including base armor stat and equipped armor pieces.
     /// </summary>
-    private int GetTotalArmor(Character character)
+    private int GetTotalArmor(Character character, Dictionary<string, InventoryItem>? inventory = null)
     {
         int totalArmor = character.Armor; // Base armor stat
 
         // Add armor bonuses from equipped items
-        var equippedArmor = GetEquippedArmorItems(character);
+        var equippedArmor = GetEquippedArmorItems(character, inventory);
         foreach (var item in equippedArmor.Values)
         {
             if (item.IsEquippable && item.ArmorBonus > 0)
