@@ -341,7 +341,7 @@ IMPORTANT: 'target' MUST contain the specific thing the player referred to:
 - For 'look' -> ""target"":""""
 - For 'inventory' -> ""target"":""""
 
-Valid actions: move, look, inventory, talk, follow, examine, take, drop, use, attack, give, equip, unequip, equipped, buy, sell, shop, gather, search, craft, recipes, quests, stop, status, display, help
+Valid actions: move, look, inventory, talk, follow, examine, take, drop, use, attack, auto, give, equip, unequip, equipped, buy, sell, shop, gather, search, craft, recipes, quests, stop, status, display, help
 
 COMMAND MODIFIERS:
 - 'status' has optional target: empty = simple status (health, exits, NPCs), 'detailed'/'stats'/'advanced' = full combat stats
@@ -408,6 +408,20 @@ Player says 'detailed inventory' OR 'show equipped' -> [{""action"":""inventory"
 Player says 'check my quests' -> [{""action"":""quests"",""target"":"""",""details"":""""}]
 Player says 'display minimal' OR 'minimal ui' -> [{""action"":""display"",""target"":""minimal"",""details"":""""}]
 Player says 'display standard' -> [{""action"":""display"",""target"":""standard"",""details"":""""}]
+
+COMBAT ACTIONS (only available when In combat: true):
+- attack [npc]: Attack once. Target = NPC name, Details = empty
+- auto/autofight/autoattack: Automatically attack until health drops to 5%. Target = empty, Details = empty
+- flee/stop/retreat: Exit combat mode. Target = empty, Details = empty
+- status: Show combat health bars. Target = empty, Details = empty
+
+Combat Examples:
+Player says 'attack' (IN COMBAT) -> [{""action"":""attack"",""target"":""Enemy Name"",""details"":""""}]
+Player says 'auto' (IN COMBAT) -> [{""action"":""auto"",""target"":"""",""details"":""""}]
+Player says 'autofight' (IN COMBAT) -> [{""action"":""auto"",""target"":"""",""details"":""""}]
+Player says 'keep attacking' (IN COMBAT) -> [{""action"":""auto"",""target"":"""",""details"":""""}]
+Player says 'status' (IN COMBAT) -> [{""action"":""status"",""target"":"""",""details"":""""}]
+Player says 'flee' (IN COMBAT) -> [{""action"":""stop"",""target"":"""",""details"":""""}]
 
 []"
             },
@@ -674,7 +688,7 @@ CRITICAL RULES:
         var enemyBar = BuildHealthBar(enemyHealthPercent, 20);
         status.AppendLine($"{npc.Name}: {enemyBar} {npc.Health}/{npc.MaxHealth} HP");
         status.AppendLine();
-        status.AppendLine("Commands: attack|fight|flee|status|stop");
+        status.AppendLine("Commands: attack|auto|flee|status|stop");
 
         return status.ToString();
     }
@@ -753,7 +767,8 @@ CRITICAL RULES:
         if (_gameState.InCombatMode)
         {
             actions.Insert(actions.Count - 1, "=== COMBAT COMMANDS ===");
-            actions.Insert(actions.Count - 1, "attack/fight - Attack the enemy again");
+            actions.Insert(actions.Count - 1, "attack - Attack the enemy once");
+            actions.Insert(actions.Count - 1, "auto - Keep fighting until you reach 5% health");
             actions.Insert(actions.Count - 1, "status - Show combat status with health bars");
             actions.Insert(actions.Count - 1, "stop - Exit combat mode (flee)");
             actions.Insert(actions.Count - 1, "");
@@ -1013,6 +1028,20 @@ RULES:
                     Details = lower
                 };
             }
+        }
+
+        // Check for auto attack command
+        if (lower.StartsWith("auto"))
+        {
+            // In combat mode, if in combat, use auto action
+            if (_gameState.InCombatMode && !string.IsNullOrEmpty(_gameState.CurrentCombatNpcId))
+            {
+                return new ActionPlan
+                {
+                    Action = "auto",
+                    Details = lower
+                };
+            }
 
             // Extract NPC name from command
             var npcNames = currentRoom.NPCIds
@@ -1228,7 +1257,7 @@ Your inventory: {(string.IsNullOrEmpty(itemList) ? "Empty" : itemList)}
 
 Return ONLY valid JSON (no markdown, no code blocks, just raw JSON):
 {
-  ""action"": ""move|look|inventory|talk|examine|take|drop|use|attack|help|unknown"",
+  ""action"": ""move|look|inventory|talk|examine|take|drop|use|attack|auto|help|unknown"",
   ""target"": ""the name/direction/item the player referred to"",
   ""details"": ""additional context from their command""
 }
@@ -1241,6 +1270,7 @@ PROCESS:
 ACTION RULES:
 - move: Player wants to go somewhere. Target = exit name or direction they mentioned
 - attack/fight/kill: Player wants to harm an NPC. Target = NPC name from the room
+- auto/autoattack/autofight: Player wants to automatically attack until health drops to 5%. In combat mode only. Target = empty string
 - talk/ask/speak: Player wants to speak with an NPC. Target = NPC name from the room
 - examine/inspect: Player wants to look closely at something. Target = item/NPC/object name
 - take/grab: Player wants to pick something up. Target = item name
@@ -1252,6 +1282,7 @@ ACTION RULES:
 - unknown: You cannot determine the intent
 
 MATCHING STRATEGY:
+- If player mentions 'auto', 'autoattack', or 'autofight' -> auto action (only in combat mode)
 - If player mentions an NPC name with aggressive verbs (attack, fight, kill, hit, strike) -> attack action
 - If player mentions an NPC name with social verbs (talk, ask, speak, chat) -> talk action
 - If player mentions an exit or direction -> move action
@@ -1313,6 +1344,7 @@ MATCHING STRATEGY:
             "follow" => await HandleFollowAsync(plan.Target),
             "examine" => HandleExamine(plan.Target, playerCommand),
             "attack" => HandleAttack(plan.Target),
+            "auto" => HandleAuto(),
             "take" => HandleTake(plan.Target),
             "drop" => HandleDrop(plan.Target),
             "use" => HandleUse(plan.Target, plan.Details),
@@ -1453,7 +1485,15 @@ Action Result: {result.Message}";
         {
             var npcNames = room.NPCIds
                 .Where(id => _gameState.NPCs.ContainsKey(id))
-                .Select(id => _gameState.NPCs[id].Name)
+                .Select(id => {
+                    var npc = _gameState.NPCs[id];
+                    string marker = "";
+                    if (!npc.IsAlive && HasLoot(npc))
+                    {
+                        marker = " 💰";
+                    }
+                    return npc.Name + marker;
+                })
                 .ToList();
 
             if (npcNames.Count > 0)
@@ -1844,6 +1884,123 @@ RULES:
 
         // Check if any other hostile NPCs in the room want to join the combat
         CheckForHostileNpcIntervention(npc, message);
+
+        return new ActionResult { Success = true, Message = message.ToString() };
+    }
+
+    /// <summary>
+    /// Handle automatic combat mode - keeps attacking until player reaches 5% health or enemy is defeated.
+    /// </summary>
+    private ActionResult HandleAuto()
+    {
+        if (!_gameState.InCombatMode || string.IsNullOrEmpty(_gameState.CurrentCombatNpcId))
+            return new ActionResult { Success = false, Message = "You're not in combat!" };
+
+        var npc = _gameState.NPCs[_gameState.CurrentCombatNpcId];
+        var message = new StringBuilder();
+        message.AppendLine("⚔️ AUTOMATIC COMBAT ENGAGED");
+        message.AppendLine("Fighting until health drops to 5% or enemy is defeated...");
+        message.AppendLine();
+
+        int roundCount = 0;
+        int playerHealthThreshold = (int)(_gameState.Player.MaxHealth * 0.05); // 5% health
+        int playerStartingHealth = _gameState.Player.Health;
+        int npcStartingHealth = npc.Health;
+        int totalPlayerDamage = 0;
+        int totalNpcDamage = 0;
+
+        // Keep attacking while player is above 5% health, alive, and enemy is alive
+        while (_gameState.Player.Health > playerHealthThreshold && _gameState.Player.IsAlive && npc.IsAlive)
+        {
+            roundCount++;
+
+            // Get companion assistance
+            var companionCharacters = _gameState.Companions
+                .Where(id => _gameState.NPCs.ContainsKey(id) && _gameState.NPCs[id].IsAlive)
+                .Select(id => _gameState.NPCs[id])
+                .ToList();
+
+            var companionAssistance = _combatService.CalculateCompanionAssistance(companionCharacters);
+
+            // Player attacks
+            var combatResult = _combatService.ResolveAttack(_gameState.Player, _gameState.PlayerInventory.Items, npc, null);
+
+            if (combatResult.WasHit)
+            {
+                // Apply damage to NPC (plus companion bonus)
+                int totalDamage = combatResult.DamageAfterArmor + companionAssistance.DamageBonus;
+                _combatService.ApplyDamage(npc, totalDamage);
+                totalPlayerDamage += totalDamage;
+
+                // Check if NPC is defeated
+                if (!npc.IsAlive)
+                {
+                    npc.CanMove = false;
+                    var xpGain = (npc.Level * 10) + (npc.MaxHealth / 5);
+                    _gameState.Player.GainExperience(xpGain);
+
+                    message.AppendLine($"⚔️ Auto Combat Summary");
+                    message.AppendLine($"Rounds fought: {roundCount}");
+                    message.AppendLine($"Damage dealt: {totalPlayerDamage}");
+                    message.AppendLine($"Damage taken: {totalNpcDamage}");
+                    message.AppendLine();
+                    message.AppendLine($"🎉 {npc.Name} is defeated! You gain {xpGain} experience.");
+
+                    // Loot currency
+                    if (_economy.Enabled && npc.Wallet.TotalBaseUnits > 0)
+                    {
+                        var lootedMoney = npc.Wallet.TotalBaseUnits;
+                        _gameState.Player.Wallet.Add(lootedMoney);
+                        npc.Wallet.TotalBaseUnits = 0;
+                        var moneyDisplay = Wallet.FormatAmount(lootedMoney, _economy);
+                        message.AppendLine($"💰 You loot {moneyDisplay} from the body!");
+                    }
+
+                    message.AppendLine($"The {npc.Name}'s body remains here for you to search or examine.");
+                    _gameState.InCombatMode = false;
+                    _gameState.CurrentCombatNpcId = null;
+                    return new ActionResult { Success = true, Message = message.ToString() };
+                }
+            }
+
+            // NPC counter-attacks
+            var counterAttack = _combatService.ResolveAttack(npc, null, _gameState.Player, _gameState.PlayerInventory.Items);
+
+            if (counterAttack.WasHit)
+            {
+                _combatService.ApplyDamage(_gameState.Player, counterAttack.DamageAfterArmor);
+                totalNpcDamage += counterAttack.DamageAfterArmor;
+
+                if (!_gameState.Player.IsAlive)
+                {
+                    message.AppendLine($"⚔️ Auto Combat Summary");
+                    message.AppendLine($"Rounds fought: {roundCount}");
+                    message.AppendLine($"Damage dealt: {totalPlayerDamage}");
+                    message.AppendLine($"Damage taken: {totalNpcDamage}");
+                    message.AppendLine();
+                    message.AppendLine("\n💀 YOU HAVE BEEN DEFEATED! Game Over.");
+                    _gameState.InCombatMode = false;
+                    _gameState.CurrentCombatNpcId = null;
+                    return new ActionResult { Success = true, Message = message.ToString() };
+                }
+            }
+        }
+
+        // Auto-fight ended - show summary
+        message.AppendLine($"⚔️ Auto Combat Summary");
+        message.AppendLine($"Rounds fought: {roundCount}");
+        message.AppendLine($"Damage dealt: {totalPlayerDamage}");
+        message.AppendLine($"Damage taken: {totalNpcDamage}");
+        message.AppendLine($"Your Health: {_gameState.Player.Health}/{_gameState.Player.MaxHealth}");
+        message.AppendLine($"{npc.Name}'s Health: {npc.Health}/{npc.MaxHealth}");
+
+        if (_gameState.Player.Health <= playerHealthThreshold)
+        {
+            message.AppendLine($"\n⚠️ Automatic combat ended! Health dropped to {(_gameState.Player.Health * 100) / _gameState.Player.MaxHealth}%");
+        }
+
+        message.AppendLine();
+        message.AppendLine(GetCombatStatus());
 
         return new ActionResult { Success = true, Message = message.ToString() };
     }
@@ -3289,8 +3446,14 @@ Respond in JSON format only:
                     .Select(id =>
                     {
                         var npc = _gameState.NPCs[id];
-                        string deathMarker = npc.IsAlive ? "" : " ☠️";
-                        return npc.Name + deathMarker;
+                        string markers = "";
+                        if (!npc.IsAlive)
+                        {
+                            markers += " ☠️";
+                            if (HasLoot(npc))
+                                markers += " 💰";
+                        }
+                        return npc.Name + markers;
                     })
                     .ToList();
 
@@ -3299,7 +3462,7 @@ Respond in JSON format only:
                     message.AppendLine("👥 NPCs: " + string.Join(", ", npcNames));
                 }
             }
-            
+
             message.AppendLine("═══════════════════════════════════");
         }
         else
@@ -3323,8 +3486,14 @@ Respond in JSON format only:
                     .Select(id =>
                     {
                         var npc = _gameState.NPCs[id];
-                        string deathMarker = npc.IsAlive ? "" : " ☠️";
-                        return npc.Name + deathMarker;
+                        string markers = "";
+                        if (!npc.IsAlive)
+                        {
+                            markers += " ☠️";
+                            if (HasLoot(npc))
+                                markers += " 💰";
+                        }
+                        return npc.Name + markers;
                     })
                     .ToList();
 
@@ -3336,6 +3505,14 @@ Respond in JSON format only:
         }
 
         return new ActionResult { Success = true, Message = message.ToString() };
+    }
+
+    /// <summary>
+    /// Check if an NPC has any lootable items or currency.
+    /// </summary>
+    private bool HasLoot(Character npc)
+    {
+        return npc.CarriedItems.Count > 0 || npc.Wallet.TotalBaseUnits > 0;
     }
 
     private ActionResult HandleStopCombat()

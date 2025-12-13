@@ -146,6 +146,8 @@ Example: FantasyQuest is defined in src/Games/FantasyQuest.cs using GameBuilder 
 - **AttemptFlee**: Base 50% + 5% per agility difference, clamped 15-95%
 - **Combat Mode**: InCombatMode flag + CurrentCombatNpcId tracks active fights
 - **NPC Death**: Bodies remain in rooms, marked with CanMove=false, can be examined and looted
+- **Auto Attack Mode**: Automatically attack enemy in rounds until player health drops to 5% or enemy is defeated; shows summary with rounds fought and total damage dealt/taken
+- **Loot Indicator**: Dead NPCs with items/currency display 💰 icon next to skull emoji (☠️) in room descriptions and status displays
 
 ### Action Handlers (GameMaster.cs)
 - **DecideActionsAsync**: LLM receives game context and returns array of ActionPlans
@@ -153,6 +155,7 @@ Example: FantasyQuest is defined in src/Games/FantasyQuest.cs using GameBuilder 
   - **HandleMove**: Validates exit exists, updates CurrentRoomId
   - **HandleTalk**: Finds NPC in current room, calls NpcBrain for dialogue
   - **HandleAttack**: Initiates combat, uses CombatService for damage resolution
+  - **HandleAuto**: Automatically attacks enemy in continuous rounds until player reaches 5% health or enemy is defeated; displays summary with round count and total damage
   - **HandleStatus**: Shows combat health bars for player and current enemy
   - **HandleStopCombat**: Exits combat mode if conditions met
   - **HandleFlee**: Attempts flee with agility-based skill check
