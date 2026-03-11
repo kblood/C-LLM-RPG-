@@ -17,8 +17,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Exclude RPGGameEditor files from being compiled with this project -->
+    <!-- Exclude sub-project files from being compiled with this project -->
     <Compile Remove="RPGGameEditor/**/*.cs" />
+    <Compile Remove="RPGWeb/**/*.cs" />
   </ItemGroup>
 
 </Project>

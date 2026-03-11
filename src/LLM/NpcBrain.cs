@@ -8,11 +8,11 @@ namespace CSharpRPGBackend.LLM;
 /// </summary>
 public class NpcBrain
 {
-    private readonly OllamaClient _ollamaClient;
+    private readonly ILlmClient _ollamaClient;
     private readonly Character _npc;
     private readonly string _systemPrompt;
 
-    public NpcBrain(OllamaClient ollamaClient, Character npc, string? systemPrompt = null)
+    public NpcBrain(ILlmClient ollamaClient, Character npc, string? systemPrompt = null)
     {
         _ollamaClient = ollamaClient;
         _npc = npc;
@@ -63,7 +63,7 @@ public class NpcBrain
 
             return response;
         }
-        catch (OllamaException)
+        catch (Exception ex) when (ex is OllamaException or LlamaCppException)
         {
             return $"*{_npc.Name} seems confused and cannot speak.*";
         }

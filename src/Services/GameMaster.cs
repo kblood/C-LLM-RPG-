@@ -23,7 +23,7 @@ public enum GameStateDisplayMode
 public class GameMaster
 {
     private readonly GameState _gameState;
-    private readonly OllamaClient _ollamaClient;
+    private readonly ILlmClient _ollamaClient;
     private readonly Dictionary<string, NpcBrain> _npcBrains;
     private readonly string _gmSystemPrompt;
     private readonly CombatService _combatService;
@@ -36,7 +36,7 @@ public class GameMaster
     public bool DebugMode { get; set; } = false;  // Toggle for debug output
     public GameStateDisplayMode DisplayMode { get; set; } = GameStateDisplayMode.Standard;  // Footer display mode
 
-    public GameMaster(GameState gameState, OllamaClient ollamaClient, string? gmSystemPrompt = null, Game? game = null)
+    public GameMaster(GameState gameState, ILlmClient ollamaClient, string? gmSystemPrompt = null, Game? game = null)
     {
         _gameState = gameState;
         _ollamaClient = ollamaClient;
@@ -3672,6 +3672,54 @@ Return ONLY the converted message - no other text, no markdown, just the message
     /// Check if any win condition is satisfied and return victory info if so.
     /// Returns null if no win condition is met.
     /// </summary>
+    /// <summary>
+    /// Execute pre-built ActionPlan objects, skipping the LLM decision step.
+    /// Runs steps 2+3 of the pipeline (execute + narrate) and returns structured feedback.
+    /// Used by AgentReplay to bypass the LLM parsing step since the agent builds plans directly.
+    /// </summary>
+    public async Task<AgentActionResponse> ExecuteActionPlansAsync(
+        List<ActionPlan> plans,
+        string playerIntentDescription = "Agent action")
+    {
+        var response = new AgentActionResponse();
+
+        _gameState.AddRecentCommand(playerIntentDescription);
+
+        // Execute each plan and collect results
+        var executionResults = new List<(string action, ActionResult result)>();
+        foreach (var plan in plans)
+        {
+            var result = await ApplyActionAsync(plan, playerIntentDescription);
+            executionResults.Add((plan.Action, result));
+            response.ActionResults.Add((plan.Action, result.Success, result.Message));
+        }
+
+        // For informational commands, return result directly without narration
+        var informationalCommands = new[] { "status", "inventory", "look", "equipped", "quests", "recipes", "shop", "help", "display" };
+        if (plans.Count == 1 && informationalCommands.Contains(plans[0].Action.ToLower()))
+        {
+            var result = executionResults[0].result;
+            response.Response = result.Success ? result.Message : $"❌ {result.Message}";
+        }
+        else
+        {
+            // Narrate the results
+            var narration = await NarrateWithResultsAsync(playerIntentDescription, plans, executionResults);
+            response.Response = BuildGameResponse(narration);
+        }
+
+        // Check win condition
+        var victoryCheck = CheckWinCondition();
+        if (victoryCheck.HasValue && victoryCheck.Value.isVictory)
+        {
+            response.IsVictory = true;
+            response.VictoryMessage = victoryCheck.Value.message;
+            response.Response = BuildGameResponse($"🏆 **VICTORY!** 🏆\n\n{victoryCheck.Value.message}");
+        }
+
+        return response;
+    }
+
     public (bool isVictory, string message)? CheckWinCondition()
     {
         // If no game reference, cannot check win conditions
@@ -3771,4 +3819,16 @@ public class NpcGiveDecision
 
     [JsonPropertyName("narrative")]
     public string Narrative { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Structured response from ExecuteActionPlansAsync, providing per-action feedback
+/// and victory detection for the AI agent.
+/// </summary>
+public class AgentActionResponse
+{
+    public string Response { get; set; } = "";
+    public bool IsVictory { get; set; }
+    public string? VictoryMessage { get; set; }
+    public List<(string action, bool success, string message)> ActionResults { get; set; } = new();
 }

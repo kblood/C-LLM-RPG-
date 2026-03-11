@@ -1,0 +1,339 @@
+@page "/play"
+@inject GameSessionService Session
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@implements IDisposable
+
+@if (!Session.IsGameActive)
+{
+    <div class="home-page">
+        <p>No game active.</p>
+        <button class="play-btn" @onclick='() => Nav.NavigateTo("/")'>Select a Game</button>
+    </div>
+    return;
+}
+
+<div class="game-layout">
+    <!-- Sidebar: game state -->
+    <aside class="sidebar @(sidebarOpen ? "open" : "")">
+        <button class="sidebar-toggle" @onclick="() => sidebarOpen = !sidebarOpen">
+            @(sidebarOpen ? "Close" : "Info")
+        </button>
+        <div class="sidebar-content">
+            <h2>@Session.CurrentGame!.Title</h2>
+
+            @{ var room = Session.GetCurrentRoom(); }
+            @if (room != null)
+            {
+                <section>
+                    <h3>Location</h3>
+                    <p class="room-name">@room.Name</p>
+                </section>
+            }
+
+            <section>
+                <h3>Health</h3>
+                @{
+                    var hp = Session.State!.Player.Health;
+                    var maxHp = Session.State.Player.MaxHealth;
+                    var hpPct = maxHp > 0 ? (int)(100.0 * hp / maxHp) : 100;
+                    var hpClass = hpPct < 25 ? "hp-critical" : hpPct < 50 ? "hp-low" : "hp-ok";
+                }
+                <div class="hp-bar">
+                    <div class="hp-fill @hpClass" style="width:@(hpPct)%"></div>
+                    <span class="hp-text">@hp / @maxHp</span>
+                </div>
+                @if (Session.State.InCombatMode)
+                {
+                    <p class="combat-indicator">In Combat!</p>
+                }
+            </section>
+
+            @if (Session.CurrentGame.Economy?.Enabled == true)
+            {
+                <section>
+                    <h3>Currency</h3>
+                    <p>@Session.State.Player.Wallet.Format(Session.CurrentGame.Economy)</p>
+                </section>
+            }
+
+            <!-- Exits (clickable) -->
+            @{
+                var exits = Session.GetExits();
+            }
+            @if (exits.Count > 0)
+            {
+                <section>
+                    <h3>Exits</h3>
+                    <div class="action-chips">
+                        @foreach (var exit in exits)
+                        {
+                            var exitCmd = "go " + exit.DisplayName;
+                            <button class="chip chip-exit" @onclick="() => QuickAction(exitCmd)"
+                                    disabled="@Session.IsProcessing">
+                                @exit.DisplayName
+                            </button>
+                        }
+                    </div>
+                </section>
+            }
+
+            <!-- NPCs (clickable) -->
+            @{
+                var npcs = Session.GetNpcsInRoom();
+            }
+            @if (npcs.Count > 0)
+            {
+                <section>
+                    <h3>NPCs Here</h3>
+                    <div class="action-chips">
+                        @foreach (var npc in npcs)
+                        {
+                            @if (npc.IsAlive)
+                            {
+                                var isEnemy = npc.Role == CSharpRPGBackend.Core.NPCRole.Warrior ||
+                                              npc.Role == CSharpRPGBackend.Core.NPCRole.Boss ||
+                                              npc.Alignment == CSharpRPGBackend.Core.CharacterAlignment.Evil;
+                                var actionLabel = isEnemy ? "Attack" : "Talk to";
+                                var actionCmd = isEnemy ? "attack " + npc.Name : "talk to " + npc.Name;
+                                var chipClass = isEnemy ? "chip-enemy" : "chip-npc";
+                                <button class="chip @chipClass" @onclick="() => QuickAction(actionCmd)"
+                                        disabled="@Session.IsProcessing">
+                                    @npc.Name
+                                    <small>@actionLabel</small>
+                                </button>
+                            }
+                            else
+                            {
+                                var examineCmd = "examine " + npc.Name;
+                                <button class="chip chip-dead" @onclick="() => QuickAction(examineCmd)"
+                                        disabled="@Session.IsProcessing">
+                                    @npc.Name (dead)
+                                    @if (npc.CarriedItems.Count > 0) { <small>Has loot</small> }
+                                </button>
+                            }
+                        }
+                    </div>
+                </section>
+            }
+
+            <!-- Floor items -->
+            @if (room != null && room.Items.Count > 0)
+            {
+                <section>
+                    <h3>Items Here</h3>
+                    <div class="action-chips">
+                        @foreach (var item in room.Items)
+                        {
+                            var takeCmd = "take " + item.Name;
+                            <button class="chip chip-item" @onclick="() => QuickAction(takeCmd)"
+                                    disabled="@Session.IsProcessing">
+                                @item.Name
+                                <small>Take</small>
+                            </button>
+                        }
+                    </div>
+                </section>
+            }
+
+            <!-- Inventory -->
+            @if (Session.State.PlayerInventory.Items.Count > 0)
+            {
+                <section>
+                    <h3>Inventory</h3>
+                    @{
+                        var equippedIds = Session.State.Player.EquipmentSlots.Values
+                            .Where(v => v != null).ToHashSet();
+                    }
+                    <div class="action-chips">
+                        @foreach (var ii in Session.State.PlayerInventory.Items.Values)
+                        {
+                            var isEq = equippedIds.Contains(ii.Item.Id);
+                            var label = isEq ? "Equipped" :
+                                ii.Item.IsEquippable ? "Equip" :
+                                ii.Item.IsConsumable ? "Use" : "";
+                            var cmd = isEq ? "unequip " + ii.Item.Name :
+                                ii.Item.IsEquippable ? "equip " + ii.Item.Name :
+                                ii.Item.IsConsumable ? "use " + ii.Item.Name : "";
+                            <div class="inv-item @(isEq ? "equipped" : "")">
+                                <span>@ii.Item.Name x@ii.Quantity</span>
+                                @if (!string.IsNullOrEmpty(cmd))
+                                {
+                                    <button class="chip-small" @onclick="() => QuickAction(cmd)"
+                                            disabled="@Session.IsProcessing">@label</button>
+                                }
+                            </div>
+                        }
+                    </div>
+                </section>
+            }
+
+            <!-- Quick actions -->
+            <section>
+                <h3>Actions</h3>
+                <div class="action-chips">
+                    <button class="chip chip-action" @onclick='() => QuickAction("look")'
+                            disabled="@Session.IsProcessing">Look</button>
+                    <button class="chip chip-action" @onclick='() => QuickAction("inventory")'
+                            disabled="@Session.IsProcessing">Inventory</button>
+                    <button class="chip chip-action" @onclick='() => QuickAction("status")'
+                            disabled="@Session.IsProcessing">Status</button>
+                    <button class="chip chip-action" @onclick='() => QuickAction("quests")'
+                            disabled="@Session.IsProcessing">Quests</button>
+                    @if (Session.State.InCombatMode)
+                    {
+                        <button class="chip chip-enemy" @onclick='() => QuickAction("auto")'
+                                disabled="@Session.IsProcessing">Auto Attack</button>
+                        <button class="chip chip-action" @onclick='() => QuickAction("flee")'
+                                disabled="@Session.IsProcessing">Flee</button>
+                    }
+                </div>
+            </section>
+
+            <section>
+                <button class="btn-end" @onclick="EndGame">End Game</button>
+            </section>
+        </div>
+    </aside>
+
+    <!-- Main: chat area -->
+    <main class="chat-area">
+        <div class="chat-messages" id="chatMessages">
+            @foreach (var entry in Session.ChatHistory)
+            {
+                <div class="chat-msg msg-@entry.Role">
+                    <span class="msg-role">@GetRoleLabel(entry.Role)</span>
+                    <div class="msg-content">@((MarkupString)FormatMessage(entry.Content))</div>
+                </div>
+            }
+            @if (Session.IsProcessing)
+            {
+                <div class="chat-msg msg-system">
+                    <span class="msg-role">System</span>
+                    <div class="msg-content loading-dots">Processing<span>.</span><span>.</span><span>.</span></div>
+                </div>
+            }
+        </div>
+
+        @if (Session.IsGameOver)
+        {
+            <div class="game-over-bar">
+                <span>@(Session.IsVictory ? "Victory!" : "Game Over")</span>
+                <button class="play-btn" @onclick="EndGame">Play Again</button>
+            </div>
+        }
+        else
+        {
+            <div class="chat-input-bar">
+                <input @ref="inputRef"
+                       @bind="playerInput"
+                       @bind:event="oninput"
+                       @onkeydown="HandleKeyDown"
+                       placeholder="What do you do?"
+                       disabled="@Session.IsProcessing"
+                       autocomplete="off" />
+                <button @onclick="SubmitAction" disabled="@(Session.IsProcessing || string.IsNullOrWhiteSpace(playerInput))">
+                    Send
+                </button>
+            </div>
+        }
+    </main>
+</div>
+
+@code {
+    private string playerInput = "";
+    private ElementReference inputRef;
+    private bool sidebarOpen = true;
+    private CancellationTokenSource? _cts;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // Auto-scroll chat to bottom
+        try
+        {
+            await JS.InvokeVoidAsync("eval",
+                "document.getElementById('chatMessages')?.scrollTo(0, document.getElementById('chatMessages')?.scrollHeight)");
+        }
+        catch { }
+
+        if (firstRender)
+        {
+            try { await inputRef.FocusAsync(); } catch { }
+        }
+    }
+
+    private async Task HandleKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(playerInput) && !Session.IsProcessing)
+        {
+            await SubmitAction();
+        }
+    }
+
+    private async Task SubmitAction()
+    {
+        if (string.IsNullOrWhiteSpace(playerInput) || Session.IsProcessing) return;
+        var command = playerInput.Trim();
+        playerInput = "";
+        StateHasChanged();
+
+        await Session.ProcessActionAsync(command);
+        StateHasChanged();
+
+        // Re-focus input
+        try { await inputRef.FocusAsync(); } catch { }
+    }
+
+    private async Task QuickAction(string command)
+    {
+        if (Session.IsProcessing) return;
+        playerInput = "";
+        StateHasChanged();
+
+        await Session.ProcessActionAsync(command);
+        StateHasChanged();
+
+        try { await inputRef.FocusAsync(); } catch { }
+    }
+
+    private void EndGame()
+    {
+        Session.EndGame();
+        Nav.NavigateTo("/");
+    }
+
+    private static string GetRoleLabel(string role) => role switch
+    {
+        "player" => "You",
+        "narrator" => "Narrator",
+        "system" => "System",
+        "error" => "Error",
+        _ => role
+    };
+
+    private static string FormatMessage(string content)
+    {
+        if (string.IsNullOrEmpty(content)) return "";
+
+        // HTML-encode first
+        content = System.Net.WebUtility.HtmlEncode(content);
+
+        // **bold**
+        content = System.Text.RegularExpressions.Regex.Replace(content,
+            @"\*\*(.+?)\*\*", "<strong>$1</strong>");
+
+        // Newlines to <br>
+        content = content.Replace("\n", "<br>");
+
+        // --- to <hr>
+        content = content.Replace("---", "<hr>");
+
+        return content;
+    }
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+}

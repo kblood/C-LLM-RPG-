@@ -1,0 +1,70 @@
+@page "/"
+@inject GameSessionService Session
+@inject NavigationManager Nav
+
+<div class="home-page">
+    <div class="home-header">
+        <h1>C# RPG Backend</h1>
+        <p class="subtitle">LLM-Powered Text Adventure</p>
+        @if (Session.LlmStatus != null)
+        {
+            <p class="llm-status @(llmHealthy ? "status-ok" : "status-error")">@Session.LlmStatus</p>
+        }
+    </div>
+
+    @if (loading)
+    {
+        <div class="loading">Loading available games...</div>
+    }
+    else if (games == null || games.Count == 0)
+    {
+        <div class="error-box">No games available.</div>
+    }
+    else
+    {
+        <div class="game-grid">
+            @foreach (var (name, game) in games)
+            {
+                <div class="game-card" @onclick="() => SelectGame(game)">
+                    <h2>@game.Title</h2>
+                    @if (!string.IsNullOrEmpty(game.Subtitle))
+                    {
+                        <p class="game-subtitle">@game.Subtitle</p>
+                    }
+                    <p class="game-style">@game.Style</p>
+                    @if (!string.IsNullOrEmpty(game.Description))
+                    {
+                        <p class="game-desc">@game.Description</p>
+                    }
+                    <div class="game-meta">
+                        <span>Rooms: @game.Rooms.Count</span>
+                        <span>NPCs: @game.NPCs.Count</span>
+                        <span>Items: @game.Items.Count</span>
+                        @if (game.HasCombat) { <span>Combat</span> }
+                        @if (game.Economy?.Enabled == true) { <span>Economy</span> }
+                    </div>
+                    <button class="play-btn">Play</button>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private List<(string name, CSharpRPGBackend.Core.Game game)>? games;
+    private bool loading = true;
+    private bool llmHealthy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        llmHealthy = await Session.CheckLlmHealthAsync();
+        games = await Session.GetAvailableGamesAsync();
+        loading = false;
+    }
+
+    private void SelectGame(CSharpRPGBackend.Core.Game game)
+    {
+        Session.StartGame(game);
+        Nav.NavigateTo("/play");
+    }
+}

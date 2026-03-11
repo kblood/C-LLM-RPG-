@@ -7,16 +7,21 @@ namespace CSharpRPGBackend.LLM;
 /// HTTP client for communicating with a local Ollama instance.
 /// Supports both standard chat completions and streaming responses.
 /// </summary>
-public class OllamaClient
+public class OllamaClient : ILlmClient
 {
     private readonly HttpClient _httpClient;
     private readonly string _baseUrl;
     private readonly string _defaultModel;
+    private readonly int _contextSize;
 
-    public OllamaClient(string baseUrl = "http://localhost:11434", string defaultModel = "mistral")
+    public string BackendName => "Ollama";
+    public string DefaultModel => _defaultModel;
+
+    public OllamaClient(string baseUrl = "http://localhost:11434", string defaultModel = "mistral", int contextSize = 8192)
     {
         _baseUrl = baseUrl;
         _defaultModel = defaultModel;
+        _contextSize = contextSize;
         _httpClient = new HttpClient();
     }
 
@@ -31,7 +36,8 @@ public class OllamaClient
         {
             Model = model,
             Messages = messages,
-            Stream = false
+            Stream = false,
+            Options = new OllamaOptions { NumCtx = _contextSize }
         };
 
         try
@@ -69,7 +75,8 @@ public class OllamaClient
         {
             Model = model,
             Messages = messages,
-            Stream = true
+            Stream = true,
+            Options = new OllamaOptions { NumCtx = _contextSize }
         };
 
         var content = new StringContent(
@@ -128,6 +135,30 @@ public class OllamaClient
             return false;
         }
     }
+
+    /// <summary>
+    /// Return the list of models that Ollama currently has pulled.
+    /// </summary>
+    public async Task<List<string>> ListModelsAsync()
+    {
+        try
+        {
+            var response = await _httpClient.GetAsync($"{_baseUrl}/api/tags");
+            response.EnsureSuccessStatusCode();
+            var json = await response.Content.ReadAsStringAsync();
+            var doc  = JsonDocument.Parse(json);
+            var result = new List<string>();
+            if (doc.RootElement.TryGetProperty("models", out var models))
+                foreach (var m in models.EnumerateArray())
+                    if (m.TryGetProperty("name", out var n))
+                        result.Add(n.GetString() ?? string.Empty);
+            return result;
+        }
+        catch
+        {
+            return new List<string>();
+        }
+    }
 }
 
 public class ChatMessage
@@ -137,6 +168,12 @@ public class ChatMessage
 
     [JsonPropertyName("content")]
     public string Content { get; set; } = string.Empty;
+}
+
+public class OllamaOptions
+{
+    [JsonPropertyName("num_ctx")]
+    public int NumCtx { get; set; } = 8192;
 }
 
 public class OllamaChatRequest
@@ -149,6 +186,9 @@ public class OllamaChatRequest
 
     [JsonPropertyName("stream")]
     public bool Stream { get; set; }
+
+    [JsonPropertyName("options")]
+    public OllamaOptions? Options { get; set; }
 }
 
 public class OllamaChatResponse
