@@ -198,6 +198,18 @@ html, body {
     margin-top: 0.25rem;
     animation: pulse 1s infinite;
 }
+.chat-indicator {
+    color: var(--green);
+    font-weight: 700;
+    font-size: 0.9rem;
+    margin-top: 0.25rem;
+}
+.npc-title {
+    color: var(--text-dim);
+    font-style: italic;
+    font-size: 0.85rem;
+    margin-bottom: 0.35rem;
+}
 
 /* Action chips */
 .action-chips { display: flex; flex-wrap: wrap; gap: 0.35rem; }
@@ -225,6 +237,13 @@ html, body {
 .chip-dead { border-left: 3px solid var(--text-dim); opacity: 0.7; }
 .chip-item { border-left: 3px solid var(--yellow); }
 .chip-action { border-left: 3px solid var(--accent2); }
+.chip-chat {
+    border-left: 3px solid var(--green);
+    background: rgba(78,202,163,0.08);
+    flex-direction: row;
+    font-size: 0.82rem;
+}
+.chip-chat:hover:not(:disabled) { background: rgba(78,202,163,0.18); border-color: var(--green); }
 
 .inv-item {
     display: flex;
@@ -259,6 +278,19 @@ html, body {
     margin-top: 0.5rem;
 }
 .btn-end:hover { background: rgba(233,69,96,0.25); }
+
+.btn-leave-chat {
+    width: 100%;
+    background: rgba(78,202,163,0.12);
+    border: 1px solid var(--green);
+    color: var(--green);
+    padding: 0.4rem;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+}
+.btn-leave-chat:hover:not(:disabled) { background: rgba(78,202,163,0.22); }
+.btn-leave-chat:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ─── Chat Area ───────────────────────────────────────────────────────── */
 .chat-area {
@@ -351,6 +383,8 @@ html, body {
     outline: none;
 }
 .chat-input-bar input:focus { border-color: var(--blue); }
+.chat-input-bar.chat-mode { border-top: 2px solid var(--green); }
+.chat-input-bar.chat-mode input:focus { border-color: var(--green); }
 .chat-input-bar input:disabled { opacity: 0.5; }
 .chat-input-bar button {
     background: var(--accent);

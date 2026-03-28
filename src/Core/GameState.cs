@@ -21,6 +21,10 @@ public class GameState
     public bool InCombatMode { get; set; } = false;
     public string? CurrentCombatNpcId { get; set; } = null;
 
+    // Chat Mode (NPC conversation)
+    public bool InChatMode { get; set; } = false;
+    public string? CurrentChatNpcId { get; set; } = null;
+
     public GameState()
     {
         InitializeDefaultGame();

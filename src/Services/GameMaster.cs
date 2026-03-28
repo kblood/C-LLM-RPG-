@@ -75,6 +75,33 @@ public class GameMaster
         // Add command to history for future context
         _gameState.AddRecentCommand(playerCommand);
 
+        // In chat mode: route most input directly as chat messages to the NPC
+        if (_gameState.InChatMode && _gameState.CurrentChatNpcId != null)
+        {
+            var cmdLower = playerCommand.Trim().ToLower();
+            // Check for exit commands
+            if (cmdLower == "leave" || cmdLower == "bye" || cmdLower == "goodbye" || cmdLower == "end chat" || cmdLower == "exit")
+            {
+                var endResult = HandleEndChat();
+                return endResult.Message;
+            }
+            // Check for game actions that should break out of chat
+            if (cmdLower.StartsWith("go ") || cmdLower.StartsWith("move ") || cmdLower.StartsWith("attack ") ||
+                cmdLower.StartsWith("take ") || cmdLower.StartsWith("equip ") || cmdLower.StartsWith("use ") ||
+                cmdLower == "look" || cmdLower == "inventory" || cmdLower == "status" || cmdLower == "quests" ||
+                cmdLower == "flee" || cmdLower == "auto")
+            {
+                HandleEndChat();
+                // Fall through to normal processing below
+            }
+            else
+            {
+                // Send directly to NPC as a chat message (skip LLM decision step)
+                var chatResult = await HandleChatAsync(playerCommand.Trim());
+                return chatResult.Success ? chatResult.Message : $"❌ {chatResult.Message}";
+            }
+        }
+
         // Step 1: Ask LLM what commands it wants to execute based on player intent and game state
         var commandsToExecute = await DecideActionsAsync(playerCommand);
 
@@ -1335,6 +1362,39 @@ MATCHING STRATEGY:
             }
         }
 
+        // In chat mode, route chat commands
+        if (_gameState.InChatMode)
+        {
+            var actionLower = plan.Action.ToLower();
+            if (actionLower == "end_chat" || actionLower == "leave" || actionLower == "bye")
+            {
+                return HandleEndChat();
+            }
+            if (actionLower == "chat" || actionLower == "say")
+            {
+                var message = !string.IsNullOrEmpty(plan.Details) ? plan.Details : plan.Target;
+                return await HandleChatAsync(message);
+            }
+            // If player types something that isn't a recognized action while in chat mode,
+            // treat it as a chat message to the NPC
+            if (actionLower != "move" && actionLower != "attack" && actionLower != "take" &&
+                actionLower != "equip" && actionLower != "use" && actionLower != "inventory" &&
+                actionLower != "status" && actionLower != "look" && actionLower != "quests" &&
+                actionLower != "help" && actionLower != "shop" && actionLower != "buy" &&
+                actionLower != "sell" && actionLower != "drop" && actionLower != "examine" &&
+                actionLower != "unequip" && actionLower != "equipped" && actionLower != "gather" &&
+                actionLower != "craft" && actionLower != "recipes" && actionLower != "display" &&
+                actionLower != "auto" && actionLower != "give" && actionLower != "follow" &&
+                actionLower != "search" && actionLower != "unknown")
+            {
+                // Treat the entire action as chat text
+                var chatText = $"{plan.Action} {plan.Target} {plan.Details}".Trim();
+                return await HandleChatAsync(chatText);
+            }
+            // For recognized game actions, exit chat mode first
+            HandleEndChat();
+        }
+
         return plan.Action.ToLower() switch
         {
             "move" => HandleMove(plan.Target),
@@ -1359,6 +1419,10 @@ MATCHING STRATEGY:
             "search" => await HandleGatherAsync(plan.Target, plan.Details),
             "craft" => HandleCraft(plan.Target, plan.Details),
             "recipes" => HandleRecipes(plan.Target),
+            "chat" => await HandleChatAsync(!string.IsNullOrEmpty(plan.Details) ? plan.Details : plan.Target),
+            "say" => await HandleChatAsync(!string.IsNullOrEmpty(plan.Details) ? plan.Details : plan.Target),
+            "end_chat" => HandleEndChat(),
+            "bye" => HandleEndChat(),
             "quests" => HandleQuests(),
             "help" => HandleHelp(),
             "status" => HandleStatus(plan.Target),
@@ -1426,6 +1490,13 @@ Action Result: {result.Message}";
 
     private ActionResult HandleMove(string exitName)
     {
+        // Exit chat mode when moving
+        if (_gameState.InChatMode)
+        {
+            _gameState.InChatMode = false;
+            _gameState.CurrentChatNpcId = null;
+        }
+
         var currentRoom = _gameState.GetCurrentRoom();
         var availableExits = currentRoom.GetAvailableExits();
 
@@ -1560,6 +1631,10 @@ Action Result: {result.Message}";
         if (npc == null)
             return new ActionResult { Success = false, Message = $"You don't see '{npcName}' here to talk to." };
 
+        // Enter chat mode with this NPC
+        _gameState.InChatMode = true;
+        _gameState.CurrentChatNpcId = npc.Id;
+
         // Get the NPC's response via their brain
         string npcResponse = "";
         if (_npcBrains.ContainsKey(npc.Id))
@@ -1580,8 +1655,128 @@ Action Result: {result.Message}";
         }
 
         // Return the NPC's actual response as the message
-        var message = $"{npc.Name} says: \"{npcResponse}\"";
+        var message = $"[Chatting with {npc.Name}]\n\n{npc.Name} says: \"{npcResponse}\"";
         return new ActionResult { Success = true, Message = message };
+    }
+
+    /// <summary>
+    /// Handle a follow-up chat message while in chat mode with an NPC.
+    /// </summary>
+    private async Task<ActionResult> HandleChatAsync(string message)
+    {
+        if (!_gameState.InChatMode || _gameState.CurrentChatNpcId == null)
+            return new ActionResult { Success = false, Message = "You aren't talking to anyone. Use 'talk to [name]' first." };
+
+        if (!_gameState.NPCs.TryGetValue(_gameState.CurrentChatNpcId, out var npc))
+        {
+            _gameState.InChatMode = false;
+            _gameState.CurrentChatNpcId = null;
+            return new ActionResult { Success = false, Message = "That NPC is no longer available." };
+        }
+
+        if (string.IsNullOrWhiteSpace(message))
+            return new ActionResult { Success = false, Message = "Say something! Or type 'leave' to end the conversation." };
+
+        string npcResponse = "";
+        if (_npcBrains.TryGetValue(npc.Id, out var brain))
+        {
+            npcResponse = await brain.RespondToPlayerAsync(message);
+        }
+
+        return new ActionResult { Success = true, Message = $"{npc.Name} says: \"{npcResponse}\"" };
+    }
+
+    /// <summary>
+    /// End the current chat with an NPC.
+    /// </summary>
+    private ActionResult HandleEndChat()
+    {
+        if (!_gameState.InChatMode)
+            return new ActionResult { Success = true, Message = "You aren't chatting with anyone." };
+
+        var npcName = "the NPC";
+        if (_gameState.CurrentChatNpcId != null && _gameState.NPCs.TryGetValue(_gameState.CurrentChatNpcId, out var npc))
+            npcName = npc.Name;
+
+        _gameState.InChatMode = false;
+        _gameState.CurrentChatNpcId = null;
+
+        return new ActionResult { Success = true, Message = $"You end your conversation with {npcName}." };
+    }
+
+    /// <summary>
+    /// Get contextual chat suggestions for the current NPC conversation.
+    /// Returns topic suggestions based on the NPC's role, the game state, and quests.
+    /// </summary>
+    public List<string> GetChatSuggestions()
+    {
+        var suggestions = new List<string>();
+        if (!_gameState.InChatMode || _gameState.CurrentChatNpcId == null)
+            return suggestions;
+
+        if (!_gameState.NPCs.TryGetValue(_gameState.CurrentChatNpcId, out var npc))
+            return suggestions;
+
+        var room = _gameState.GetCurrentRoom();
+
+        // General suggestions everyone gets
+        suggestions.Add("What can you tell me about this place?");
+        suggestions.Add("Have you heard any rumors?");
+
+        // Role-specific suggestions
+        switch (npc.Role)
+        {
+            case NPCRole.Merchant:
+                suggestions.Add("What do you have for sale?");
+                suggestions.Add("I'd like to buy something");
+                break;
+            case NPCRole.Questgiver:
+                suggestions.Add("Do you have any work for me?");
+                suggestions.Add("Tell me about the quest");
+                break;
+            case NPCRole.Healer:
+                suggestions.Add("Can you heal me?");
+                suggestions.Add("Do you have any potions?");
+                break;
+            case NPCRole.Guard:
+                suggestions.Add("Is there any danger nearby?");
+                suggestions.Add("What are you guarding?");
+                break;
+            case NPCRole.CommonPerson:
+                suggestions.Add("How's life around here?");
+                break;
+            case NPCRole.Warrior:
+            case NPCRole.Boss:
+                suggestions.Add("I don't want to fight");
+                suggestions.Add("Why are you hostile?");
+                break;
+        }
+
+        // If NPC can craft
+        if (npc.CanCraft)
+        {
+            suggestions.Add("What can you craft for me?");
+        }
+
+        // If player has active quests, suggest asking about them
+        if (_gameState.ActiveQuests.Count > 0)
+        {
+            var quest = _gameState.ActiveQuests.FirstOrDefault(q =>
+                q.Status != QuestStatus.Completed && q.Status != QuestStatus.TurnedIn);
+            if (quest != null)
+                suggestions.Add($"Do you know anything about {quest.Title}?");
+        }
+
+        // If game has an objective
+        if (_game != null && !string.IsNullOrEmpty(_game.GameObjective))
+        {
+            suggestions.Add("Can you help me with my quest?");
+        }
+
+        // Always offer goodbye
+        suggestions.Add("Goodbye");
+
+        return suggestions;
     }
 
     private async Task<ActionResult> HandleFollowAsync(string npcName)
@@ -1770,6 +1965,13 @@ RULES:
 
     private ActionResult HandleAttack(string npcName)
     {
+        // Exit chat mode when attacking
+        if (_gameState.InChatMode)
+        {
+            _gameState.InChatMode = false;
+            _gameState.CurrentChatNpcId = null;
+        }
+
         var room = _gameState.GetCurrentRoom();
         var npcNameLower = npcName.ToLower();
 

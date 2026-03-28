@@ -232,6 +232,16 @@ public class GameSessionService
             .ToList();
     }
 
+    // Chat mode info
+    public bool InChatMode => _gameState?.InChatMode == true;
+    public Character? GetChatNpc()
+    {
+        if (_gameState == null || !_gameState.InChatMode || _gameState.CurrentChatNpcId == null)
+            return null;
+        return _gameState.NPCs.TryGetValue(_gameState.CurrentChatNpcId, out var npc) ? npc : null;
+    }
+    public List<string> GetChatSuggestions() => _gameMaster?.GetChatSuggestions() ?? new();
+
     private void AddDefaultStartingItems(Game game)
     {
         foreach (var item in game.Items.Values)
