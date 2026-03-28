@@ -1,0 +1,252 @@
+@page "/settings"
+@inject RPGWeb.Services.GameSessionService Session
+@inject NavigationManager Nav
+
+<div class="settings-page">
+    <div class="settings-header">
+        <div>
+            <h1>⚙️ Settings</h1>
+            <p class="settings-subtitle">Configure your LLM backend</p>
+        </div>
+        <button class="btn-back" @onclick='() => Nav.NavigateTo("/")'>← Back to Menu</button>
+    </div>
+
+    <div class="settings-container">
+
+        <!-- ── Backend ─────────────────────────────────────────────── -->
+        <div class="settings-card">
+            <h2>LLM Backend</h2>
+
+            <div class="setting-row">
+                <label>Backend</label>
+                <div class="setting-control">
+                    <select @bind="backend">
+                        <option value="ollama">Ollama</option>
+                        <option value="llamacpp">llama.cpp</option>
+                    </select>
+                </div>
+            </div>
+
+            @if (backend == "llamacpp")
+            {
+                <div class="setting-row">
+                    <label>llama.cpp URL</label>
+                    <div class="setting-control">
+                        <input type="text" @bind="llamaCppUrl" placeholder="http://localhost:8080" />
+                        <small>HTTP endpoint for llama-server</small>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="setting-row">
+                    <label>Ollama URL</label>
+                    <div class="setting-control">
+                        <input type="text" @bind="ollamaUrl" placeholder="http://localhost:11434" />
+                        <small>HTTP endpoint for the Ollama service</small>
+                    </div>
+                </div>
+            }
+
+            <div class="setting-row">
+                <label>Model</label>
+                <div class="setting-control">
+                    <div class="model-input-row">
+                        <input type="text" @bind="model" placeholder="granite4:3b" class="model-input" />
+                        @if (backend != "llamacpp")
+                        {
+                            <button class="btn-fetch" @onclick="FetchModelsAsync" disabled="@fetchingModels" title="Fetch available models from Ollama">
+                                @(fetchingModels ? "⏳" : "🔍 Fetch")
+                            </button>
+                        }
+                    </div>
+                    <small>Model identifier used for all LLM calls</small>
+                    @if (availableModels.Count > 0)
+                    {
+                        <div class="model-pills">
+                            @foreach (var m in availableModels)
+                            {
+                                <button class="model-pill @(m == model ? "active" : "")" @onclick="() => model = m">@m</button>
+                            }
+                        </div>
+                    }
+                    else if (fetchError != null)
+                    {
+                        <span class="fetch-error">@fetchError</span>
+                    }
+                </div>
+            </div>
+
+            <div class="setting-row">
+                <label>Context Size</label>
+                <div class="setting-control">
+                    <div class="context-row">
+                        <input type="range" min="1024" max="131072" step="1024"
+                               @bind="contextSize" @bind:event="oninput" class="context-slider" />
+                        <span class="context-value">@contextSize.ToString("N0")</span>
+                    </div>
+                    <small>Token context window (affects memory usage and response quality)</small>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Connection Status ───────────────────────────────────── -->
+        @if (statusMessage != null)
+        {
+            <div class="settings-card status-card @(statusOk ? "status-ok-card" : "status-error-card")">
+                <span>@statusMessage</span>
+            </div>
+        }
+
+        <!-- ── Actions ─────────────────────────────────────────────── -->
+        <div class="settings-card actions-card">
+            <button class="btn-action btn-test" @onclick="TestConnectionAsync" disabled="@busy">
+                @(testing ? "Testing…" : "🔌 Test Connection")
+            </button>
+            <button class="btn-action btn-save" @onclick="SaveAsync" disabled="@busy">
+                @(saving ? "Saving…" : "💾 Save & Apply")
+            </button>
+            <button class="btn-action btn-reset" @onclick="ResetToDefaults" disabled="@busy">
+                ↩ Reset Defaults
+            </button>
+        </div>
+
+        @if (saved)
+        {
+            <p class="save-note">✅ Settings saved. They will be used for your next game.</p>
+        }
+    </div>
+</div>
+
+@code {
+    // Local copies of settings (edited without touching the live singleton)
+    private string backend     = "ollama";
+    private string ollamaUrl   = "http://localhost:11434";
+    private string llamaCppUrl = "http://localhost:8080";
+    private string model       = "granite4:3b";
+    private int    contextSize = 8192;
+
+    private List<string> availableModels = new();
+    private string?      fetchError;
+    private bool         fetchingModels;
+
+    private string? statusMessage;
+    private bool    statusOk;
+    private bool    testing;
+    private bool    saving;
+    private bool    saved;
+
+    private bool busy => testing || saving || fetchingModels;
+
+    protected override void OnInitialized()
+    {
+        var s = Session.GetSettings();
+        backend     = s.IsLlamaCpp ? "llamacpp" : "ollama";
+        ollamaUrl   = s.OllamaUrl;
+        llamaCppUrl = s.LlamaCppUrl;
+        model       = s.Model;
+        contextSize = s.ContextSize;
+    }
+
+    private async Task FetchModelsAsync()
+    {
+        fetchingModels = true;
+        fetchError     = null;
+        availableModels.Clear();
+        try
+        {
+            // Build a temporary client with the current URL to fetch models
+            var tmp = new CSharpRPGBackend.LLM.LlmSettings
+            {
+                Backend    = "ollama",
+                OllamaUrl  = ollamaUrl,
+                Model      = model,
+                ContextSize = contextSize
+            };
+            var client = tmp.CreateClient();
+            availableModels = await client.ListModelsAsync();
+            if (availableModels.Count == 0)
+                fetchError = "No models found (is Ollama running?)";
+        }
+        catch (Exception ex)
+        {
+            fetchError = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            fetchingModels = false;
+        }
+    }
+
+    private async Task TestConnectionAsync()
+    {
+        testing       = true;
+        statusMessage = null;
+        try
+        {
+            var tmp = BuildTempSettings();
+            var client  = tmp.CreateClient();
+            var healthy = await client.IsHealthyAsync();
+            statusOk      = healthy;
+            statusMessage = healthy
+                ? $"✅ Connected to {client.BackendName} at {(tmp.IsLlamaCpp ? tmp.LlamaCppUrl : tmp.OllamaUrl)}"
+                : $"❌ Cannot reach {client.BackendName}";
+        }
+        catch (Exception ex)
+        {
+            statusOk      = false;
+            statusMessage = $"❌ Error: {ex.Message}";
+        }
+        finally
+        {
+            testing = false;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        saving = true;
+        saved  = false;
+        try
+        {
+            var s = Session.GetSettings();
+            s.Backend     = backend;
+            s.OllamaUrl   = ollamaUrl;
+            s.LlamaCppUrl = llamaCppUrl;
+            s.Model       = model;
+            s.ContextSize = contextSize;
+            s.Save();
+            Session.ApplySettings();
+            // Refresh health status on the home page
+            await Session.CheckLlmHealthAsync();
+            saved = true;
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private void ResetToDefaults()
+    {
+        var defaults = new CSharpRPGBackend.LLM.LlmSettings();
+        backend     = "ollama";
+        ollamaUrl   = defaults.OllamaUrl;
+        llamaCppUrl = defaults.LlamaCppUrl;
+        model       = defaults.Model;
+        contextSize = defaults.ContextSize;
+        statusMessage = null;
+        saved = false;
+        availableModels.Clear();
+        fetchError = null;
+    }
+
+    private CSharpRPGBackend.LLM.LlmSettings BuildTempSettings() => new()
+    {
+        Backend     = backend,
+        OllamaUrl   = ollamaUrl,
+        LlamaCppUrl = llamaCppUrl,
+        Model       = model,
+        ContextSize = contextSize
+    };
+}

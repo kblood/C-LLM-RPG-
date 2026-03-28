@@ -7,16 +7,14 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
-// Load LLM settings — use environment variable or defaults
-var settings = new LlmSettings();
+// Load LLM settings — persisted file first, then env/config overrides
+var settings = LlmSettings.Load();
 var ollamaUrl = builder.Configuration["OllamaUrl"]
-    ?? Environment.GetEnvironmentVariable("OLLAMA_URL")
-    ?? "http://localhost:11434";
+    ?? Environment.GetEnvironmentVariable("OLLAMA_URL");
 var model = builder.Configuration["Model"]
-    ?? Environment.GetEnvironmentVariable("LLM_MODEL")
-    ?? "granite4:3b";
-settings.OllamaUrl = ollamaUrl;
-settings.Model = model;
+    ?? Environment.GetEnvironmentVariable("LLM_MODEL");
+if (ollamaUrl != null) settings.OllamaUrl = ollamaUrl;
+if (model != null) settings.Model = model;
 
 // LLM client is singleton (stateless HTTP, shared across all sessions)
 builder.Services.AddSingleton<ILlmClient>(settings.CreateClient());

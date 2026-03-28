@@ -10,6 +10,9 @@
         {
             <p class="llm-status @(llmHealthy ? "status-ok" : "status-error")">@Session.LlmStatus</p>
         }
+        <div class="home-actions">
+            <button class="btn-settings" @onclick='() => Nav.NavigateTo("/settings")'>⚙️ Settings</button>
+        </div>
     </div>
 
     @if (loading)

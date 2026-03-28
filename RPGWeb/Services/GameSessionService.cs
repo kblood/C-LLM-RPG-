@@ -16,6 +16,7 @@ public class GameSessionService
 {
     private readonly ILlmClient _llmClient;
     private readonly LlmSettings _settings;
+    private ILlmClient _activeClient;   // recreated when settings change
     private GameState? _gameState;
     private GameMaster? _gameMaster;
     private Game? _game;
@@ -34,6 +35,7 @@ public class GameSessionService
     {
         _llmClient = llmClient;
         _settings = settings;
+        _activeClient = llmClient;
     }
 
     /// <summary>
@@ -78,10 +80,10 @@ public class GameSessionService
     {
         try
         {
-            var healthy = await _llmClient.IsHealthyAsync();
+            var healthy = await _activeClient.IsHealthyAsync();
             LlmStatus = healthy
-                ? $"Connected to {_llmClient.BackendName} ({_settings.Model})"
-                : $"Cannot reach {_llmClient.BackendName}";
+                ? $"Connected to {_activeClient.BackendName} ({_settings.Model})"
+                : $"Cannot reach {_activeClient.BackendName}";
             return healthy;
         }
         catch (Exception ex)
@@ -141,7 +143,7 @@ public class GameSessionService
             _gameState.Player.MaxHealth = game.InitialPlayerHealth;
         }
 
-        _gameMaster = new GameMaster(_gameState, _llmClient, null, game);
+        _gameMaster = new GameMaster(_gameState, _activeClient, null, game);
 
         // Reset state
         ChatHistory.Clear();
@@ -241,6 +243,24 @@ public class GameSessionService
         return _gameState.NPCs.TryGetValue(_gameState.CurrentChatNpcId, out var npc) ? npc : null;
     }
     public List<string> GetChatSuggestions() => _gameMaster?.GetChatSuggestions() ?? new();
+
+    // LLM settings management
+    public LlmSettings GetSettings() => _settings;
+
+    /// <summary>
+    /// Recreate the active LLM client from current settings.
+    /// Changes take effect for the next game started.
+    /// </summary>
+    public void ApplySettings()
+    {
+        _activeClient = _settings.CreateClient();
+        LlmStatus = null; // will refresh on next health check
+    }
+
+    /// <summary>
+    /// List models available on the current backend (Ollama only; empty for llama.cpp).
+    /// </summary>
+    public Task<List<string>> ListModelsAsync() => _activeClient.ListModelsAsync();
 
     private void AddDefaultStartingItems(Game game)
     {

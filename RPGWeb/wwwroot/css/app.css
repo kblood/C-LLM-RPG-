@@ -398,6 +398,162 @@ html, body {
 .chat-input-bar button:disabled { opacity: 0.4; cursor: not-allowed; }
 .chat-input-bar button:hover:not(:disabled) { opacity: 0.85; }
 
+/* ─── Home Page – Settings Button ───────────────────────────────────── */
+.home-actions { margin-top: 1rem; }
+.btn-settings {
+    background: var(--accent2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 0.5rem 1.1rem;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s;
+}
+.btn-settings:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* ─── Settings Page ──────────────────────────────────────────────────── */
+.settings-page {
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem;
+}
+.settings-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 2rem;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+.settings-header h1 { font-size: 1.8rem; color: var(--yellow); }
+.settings-subtitle { color: var(--text-dim); font-size: 0.9rem; margin-top: 0.2rem; }
+.btn-back {
+    background: var(--accent2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 0.5rem 1.1rem;
+    border-radius: 6px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.2s;
+}
+.btn-back:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.settings-container { display: flex; flex-direction: column; gap: 1.2rem; }
+
+.settings-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.4rem 1.5rem;
+}
+.settings-card h2 {
+    font-size: 1rem;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 1.1rem;
+}
+
+.setting-row {
+    display: grid;
+    grid-template-columns: 130px 1fr;
+    gap: 0.5rem 1rem;
+    align-items: start;
+    margin-bottom: 1rem;
+}
+.setting-row label {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-dim);
+    padding-top: 0.45rem;
+}
+.setting-control { display: flex; flex-direction: column; gap: 0.3rem; }
+.setting-control input[type="text"],
+.setting-control select {
+    background: var(--bg-input);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 0.45rem 0.7rem;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    width: 100%;
+    transition: border-color 0.2s;
+}
+.setting-control input[type="text"]:focus,
+.setting-control select:focus { outline: none; border-color: var(--accent); }
+.setting-control small { color: var(--text-dim); font-size: 0.78rem; }
+
+/* Model picker */
+.model-input-row { display: flex; gap: 0.5rem; }
+.model-input { flex: 1; }
+.btn-fetch {
+    background: var(--accent2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 0.4rem 0.75rem;
+    border-radius: 6px;
+    font-size: 0.82rem;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.2s;
+}
+.btn-fetch:hover:not(:disabled) { background: var(--accent); color: #fff; }
+.btn-fetch:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.model-pills { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.5rem; }
+.model-pill {
+    background: var(--bg-input);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 0.2rem 0.75rem;
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.model-pill:hover { border-color: var(--accent); color: var(--text); }
+.model-pill.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.fetch-error { color: var(--red); font-size: 0.8rem; }
+
+/* Context size slider */
+.context-row { display: flex; align-items: center; gap: 0.75rem; }
+.context-slider { flex: 1; accent-color: var(--accent); }
+.context-value { font-size: 0.85rem; color: var(--yellow); min-width: 55px; text-align: right; }
+
+/* Status cards */
+.status-card { font-size: 0.9rem; text-align: center; padding: 0.9rem 1.2rem; }
+.status-ok-card    { border-color: var(--green); color: var(--green); background: rgba(78,202,163,0.08); }
+.status-error-card { border-color: var(--red);   color: var(--red);   background: rgba(233,69,96,0.08); }
+
+/* Action buttons */
+.actions-card { display: flex; flex-wrap: wrap; gap: 0.75rem; padding: 1rem 1.5rem; }
+.btn-action {
+    flex: 1;
+    min-width: 140px;
+    padding: 0.65rem 1rem;
+    border: none;
+    border-radius: 7px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.2s, transform 0.15s;
+}
+.btn-action:hover:not(:disabled) { opacity: 0.85; transform: translateY(-1px); }
+.btn-action:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-test  { background: var(--blue);   color: #fff; }
+.btn-save  { background: var(--accent); color: #fff; }
+.btn-reset { background: var(--accent2); color: var(--text); border: 1px solid var(--border); }
+
+.save-note {
+    text-align: center;
+    color: var(--green);
+    font-size: 0.88rem;
+    padding: 0.5rem;
+}
+
 .game-over-bar {
     display: flex;
     justify-content: center;
