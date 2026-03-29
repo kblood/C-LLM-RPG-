@@ -23,12 +23,12 @@ timeout /t 2 /nobreak >nul
 
 :: Build first to catch errors before starting
 echo  Building RPGWeb project...
-dotnet build RPGWeb\RPGWeb.csproj --nologo -q
+dotnet build RPGWeb\RPGWeb.csproj --nologo -v:minimal
 if errorlevel 1 (
     echo  Build failed - clearing stale obj folders and retrying...
     if exist "obj" rd /s /q "obj" 2>nul
     if exist "RPGWeb\obj" rd /s /q "RPGWeb\obj" 2>nul
-    dotnet build RPGWeb\RPGWeb.csproj --nologo -q
+    dotnet build RPGWeb\RPGWeb.csproj --nologo -v:minimal
     if errorlevel 1 (
         echo.
         echo  BUILD FAILED. Fix errors above and try again.
