@@ -19,14 +19,15 @@ if errorlevel 1 (
 :: Kill any previously running RPGWeb instance so the DLL isn't locked during build
 echo  Stopping any previous RPGWeb instance...
 taskkill /FI "WINDOWTITLE eq RPG Web Server" /F >nul 2>&1
-timeout /t 1 /nobreak >nul
+timeout /t 2 /nobreak >nul
 
 :: Build first to catch errors before starting
 echo  Building RPGWeb project...
 dotnet build RPGWeb\RPGWeb.csproj --nologo -q
 if errorlevel 1 (
-    echo  Build failed - trying clean build...
-    dotnet clean RPGWeb\RPGWeb.csproj --nologo -q >nul 2>&1
+    echo  Build failed - clearing stale obj folders and retrying...
+    if exist "obj" rd /s /q "obj" 2>nul
+    if exist "RPGWeb\obj" rd /s /q "RPGWeb\obj" 2>nul
     dotnet build RPGWeb\RPGWeb.csproj --nologo -q
     if errorlevel 1 (
         echo.
