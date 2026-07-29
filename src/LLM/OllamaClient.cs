@@ -206,7 +206,7 @@ public class OllamaChatResponse
     public bool Done { get; set; }
 }
 
-public class OllamaException : Exception
+public class OllamaException : LlmClientException
 {
     public OllamaException(string message, Exception? innerException = null)
         : base(message, innerException)

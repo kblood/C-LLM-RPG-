@@ -8,7 +8,12 @@ namespace CSharpRPGBackend.Services;
 /// </summary>
 public class CombatService
 {
-    private readonly Random _random = new();
+    private readonly Random _random;
+
+    public CombatService(Random? random = null)
+    {
+        _random = random ?? new Random();
+    }
 
     /// <summary>
     /// Represents the result of a combat action.

@@ -2,7 +2,6 @@
 @inject GameSessionService Session
 @inject NavigationManager Nav
 @inject IJSRuntime JS
-@implements IDisposable
 
 @if (!Session.IsGameActive)
 {
@@ -21,6 +20,7 @@
         </button>
         <div class="sidebar-content">
             <h2>@Session.CurrentGame!.Title</h2>
+            <p>Turn @Session.State!.TurnNumber · Level @Session.State.Player.Level · @Session.State.Player.Experience XP</p>
 
             @{ var room = Session.GetCurrentRoom(); }
             @if (room != null)
@@ -222,6 +222,11 @@
                                 disabled="@Session.IsProcessing">Status</button>
                         <button class="chip chip-action" @onclick='() => QuickAction("quests")'
                                 disabled="@Session.IsProcessing">Quests</button>
+                        @if (Session.State.WorldProjects.Count > 0)
+                        {
+                            <button class="chip chip-action" @onclick='() => QuickAction("projects")'
+                                    disabled="@Session.IsProcessing">World Projects</button>
+                        }
                         @if (Session.State.InCombatMode)
                         {
                             <button class="chip chip-enemy" @onclick='() => QuickAction("auto")'
@@ -234,6 +239,11 @@
             }
 
             <section>
+                <button class="btn-end" @onclick="SaveGameAsync" disabled="@Session.IsProcessing">Save Game</button>
+                @if (!string.IsNullOrWhiteSpace(Session.LastSaveStatus))
+                {
+                    <small>@Session.LastSaveStatus</small>
+                }
                 <button class="btn-end" @onclick="EndGame">End Game</button>
             </section>
         </div>
@@ -302,7 +312,6 @@
     private string playerInput = "";
     private ElementReference inputRef;
     private bool sidebarOpen = true;
-    private CancellationTokenSource? _cts;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -360,6 +369,12 @@
         Nav.NavigateTo("/");
     }
 
+    private async Task SaveGameAsync()
+    {
+        await Session.SaveGameAsync();
+        StateHasChanged();
+    }
+
     private static string GetRoleLabel(string role) => role switch
     {
         "player" => "You",
@@ -389,9 +404,4 @@
         return content;
     }
 
-    public void Dispose()
-    {
-        _cts?.Cancel();
-        _cts?.Dispose();
-    }
 }

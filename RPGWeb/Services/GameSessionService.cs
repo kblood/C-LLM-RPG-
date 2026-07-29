@@ -1,8 +1,9 @@
-using System.Text.Json;
 using CSharpRPGBackend.Core;
 using CSharpRPGBackend.LLM;
 using CSharpRPGBackend.Services;
 using CSharpRPGBackend.Games;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace RPGWeb.Services;
 
@@ -14,12 +15,13 @@ public record ChatEntry(string Role, string Content, DateTime Timestamp);
 /// </summary>
 public class GameSessionService
 {
-    private readonly ILlmClient _llmClient;
     private readonly LlmSettings _settings;
+    private readonly BrowserSaveSlot _saveSlot;
     private ILlmClient _activeClient;   // recreated when settings change
     private GameState? _gameState;
     private GameMaster? _gameMaster;
     private Game? _game;
+    private readonly GameSaveService _saveService = new();
 
     public bool IsGameActive => _gameState != null && _game != null && _gameMaster != null;
     public GameState? State => _gameState;
@@ -30,12 +32,16 @@ public class GameSessionService
     public bool IsDead { get; private set; }
     public bool IsGameOver => IsVictory || IsDead;
     public string? LlmStatus { get; private set; }
+    public string? LastSaveStatus { get; private set; }
 
-    public GameSessionService(ILlmClient llmClient, LlmSettings settings)
+    public GameSessionService(LlmSettings settings, BrowserSaveSlot saveSlot)
     {
-        _llmClient = llmClient;
-        _settings = settings;
-        _activeClient = llmClient;
+        // The registered settings object is server-wide configuration. Each
+        // circuit gets an independent runtime copy so one browser cannot change
+        // another browser's provider/model selection or rewrite server settings.
+        _settings = settings.CreateRuntimeCopy();
+        _saveSlot = saveSlot;
+        _activeClient = _settings.CreateClient();
     }
 
     /// <summary>
@@ -82,7 +88,7 @@ public class GameSessionService
         {
             var healthy = await _activeClient.IsHealthyAsync();
             LlmStatus = healthy
-                ? $"Connected to {_activeClient.BackendName} ({_settings.Model})"
+                ? $"Connected to {_activeClient.BackendName} ({_activeClient.DefaultModel})"
                 : $"Cannot reach {_activeClient.BackendName}";
             return healthy;
         }
@@ -99,56 +105,14 @@ public class GameSessionService
     public void StartGame(Game game)
     {
         _game = game;
-        _gameState = new GameState
-        {
-            Rooms = game.Rooms,
-            NPCs = game.NPCs,
-            CurrentRoomId = game.StartingRoomId
-        };
-
-        // Initialize starting currency
-        if (game.Economy?.Enabled == true && game.StartingCurrency > 0)
-            _gameState.Player.Wallet.Add(game.StartingCurrency);
-
-        // Add starting items
-        if (game.CustomSettings.ContainsKey("startingItems"))
-        {
-            try
-            {
-                var json = game.CustomSettings["startingItems"];
-                var items = JsonSerializer.Deserialize<List<StartingItemDefinition>>(json);
-                if (items != null)
-                {
-                    foreach (var si in items)
-                    {
-                        if (game.Items.TryGetValue(si.ItemId, out var item))
-                            _gameState.PlayerInventory.AddItem(item, si.Quantity);
-                    }
-                }
-            }
-            catch
-            {
-                AddDefaultStartingItems(game);
-            }
-        }
-        else
-        {
-            AddDefaultStartingItems(game);
-        }
-
-        // Set player health from game definition
-        if (game.InitialPlayerHealth > 0)
-        {
-            _gameState.Player.Health = game.InitialPlayerHealth;
-            _gameState.Player.MaxHealth = game.InitialPlayerHealth;
-        }
-
+        _gameState = GameStateFactory.Create(game);
         _gameMaster = new GameMaster(_gameState, _activeClient, null, game);
 
         // Reset state
         ChatHistory.Clear();
         IsVictory = false;
         IsDead = false;
+        LastSaveStatus = null;
 
         // Add intro messages
         if (!string.IsNullOrEmpty(game.StoryIntroduction))
@@ -195,6 +159,8 @@ public class GameSessionService
                 ChatHistory.Add(new ChatEntry("system", "You have been defeated...", DateTime.Now));
             }
 
+            await TryAutoSaveAsync();
+
             return response;
         }
         catch (Exception ex)
@@ -219,6 +185,48 @@ public class GameSessionService
         _game = null;
         IsVictory = false;
         IsDead = false;
+    }
+
+    public bool HasSave(Game game) => File.Exists(GetSavePath(game.Id));
+
+    public async Task SaveGameAsync()
+    {
+        if (_gameState == null || _game == null)
+            throw new InvalidOperationException("No game is active.");
+
+        await _saveService.SaveAsync(GetSavePath(_game.Id), _gameState, _game.Id);
+        LastSaveStatus = $"Saved on turn {_gameState.TurnNumber}.";
+    }
+
+    public async Task LoadGameAsync(Game game)
+    {
+        var document = await _saveService.LoadAsync(GetSavePath(game.Id));
+        if (!string.IsNullOrWhiteSpace(document.GameId) &&
+            !document.GameId.Equals(game.Id, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("That save belongs to a different game.");
+        }
+
+        _game = game;
+        _gameState = document.State;
+        _gameMaster = new GameMaster(_gameState, _activeClient, null, game);
+        ChatHistory.Clear();
+        ChatHistory.Add(new ChatEntry(
+            "system",
+            $"Continued {game.Title} from turn {_gameState.TurnNumber}.",
+            DateTime.Now));
+        var winCheck = _gameMaster.CheckWinCondition();
+        IsVictory = game.WinConditionRoomIds?.Contains(_gameState.CurrentRoomId) == true ||
+                    winCheck is { isVictory: true };
+        IsDead = !_gameState.Player.IsAlive;
+        if (IsVictory)
+        {
+            ChatHistory.Add(new ChatEntry(
+                "system",
+                winCheck?.message ?? "Victory! You have achieved the objective!",
+                DateTime.Now));
+        }
+        LastSaveStatus = $"Loaded save from {document.SavedAtUtc.ToLocalTime():g}.";
     }
 
     // Current room info for the sidebar
@@ -258,16 +266,40 @@ public class GameSessionService
     }
 
     /// <summary>
-    /// List models available on the current backend (Ollama only; empty for llama.cpp).
+    /// List models available on the current backend.
     /// </summary>
     public Task<List<string>> ListModelsAsync() => _activeClient.ListModelsAsync();
 
-    private void AddDefaultStartingItems(Game game)
+    private async Task TryAutoSaveAsync()
     {
-        foreach (var item in game.Items.Values)
+        try
         {
-            if (item.Type == ItemType.Weapon || item.Type == ItemType.Armor)
-                _gameState!.PlayerInventory.AddItem(item, 1);
+            await SaveGameAsync();
         }
+        catch (Exception ex)
+        {
+            LastSaveStatus = $"Autosave failed: {ex.Message}";
+        }
+    }
+
+    private string GetSavePath(string gameId)
+    {
+        var safeGameId = string.Concat(gameId.Where(character =>
+            char.IsLetterOrDigit(character) || character is '-' or '_'));
+        if (string.IsNullOrWhiteSpace(safeGameId))
+            safeGameId = "game";
+        if (safeGameId.Length > 64)
+            safeGameId = safeGameId[..64];
+
+        var gameIdHash = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(gameId))).ToLowerInvariant();
+        var saveFileName = $"{safeGameId}-{gameIdHash}.json";
+
+        return Path.Combine(
+            Directory.GetCurrentDirectory(),
+            "saves",
+            "web",
+            _saveSlot.Id,
+            saveFileName);
     }
 }

@@ -386,9 +386,20 @@ public static class SciFiAdventure
             Title = "Escape Station Zeta",
             Description = "Survive the alien outbreak and reach the escape pods before the hive ship arrives",
             GiverNpcId = "station_commander",
+            Status = QuestStatus.Accepted,
+            Type = QuestType.Story,
             RewardExperience = 400,
             RewardGold = 0,  // No money in space!
-            Objectives = new() { "Survive lower decks", "Reach escape pod bay", "Launch escape pod" }
+            Objectives = new() { "Survive lower decks", "Reach escape pod bay", "Launch escape pod" },
+            Requirements = new()
+            {
+                new QuestRequirement
+                {
+                    Type = "location",
+                    TargetId = "escape_pod_bay",
+                    TargetName = "Escape Pod Bay"
+                }
+            }
         };
 
         gameBuilder.AddQuest(escapeQuest);
@@ -406,8 +417,15 @@ public static class SciFiAdventure
                            "You've survived Station Zeta. Against all odds, you're going home."
         });
 
-        return gameBuilder
+        var game = gameBuilder
             .WithStartingRoom("crew_quarters")
             .Build();
+        game.StartingItems = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["laser_pistol"] = 1,
+            ["combat_suit"] = 1,
+            ["stim_pack"] = 2
+        };
+        return game;
     }
 }

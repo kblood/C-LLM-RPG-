@@ -8,7 +8,7 @@ var gamesDirectory = Path.Combine(Directory.GetCurrentDirectory(), "games");
 // ── Load persisted settings (llm-settings.json) ───────────────────────────────
 var settings = LlmSettings.Load();
 
-// CLI overrides (--backend=  --model=  --ollama-url=  --llamacpp-url=)
+// CLI overrides (credentials deliberately come from environment variables, not arguments)
 ApplyCliOverrides(args, settings);
 
 // Build the LLM client from current settings
@@ -21,11 +21,20 @@ static void ApplyCliOverrides(string[] args, LlmSettings s)
         if (arg.StartsWith("--backend=",     StringComparison.OrdinalIgnoreCase))
             s.Backend = arg.Split('=', 2)[1];
         else if (arg.StartsWith("--model=",  StringComparison.OrdinalIgnoreCase))
-            s.Model   = arg.Split('=', 2)[1];
+        {
+            var model = arg.Split('=', 2)[1];
+            s.Model = model;
+            s.GeminiModel = model;
+            s.OpenRouterModel = model;
+        }
         else if (arg.StartsWith("--ollama-url=", StringComparison.OrdinalIgnoreCase))
             s.OllamaUrl = arg.Split('=', 2)[1];
         else if (arg.StartsWith("--llamacpp-url=", StringComparison.OrdinalIgnoreCase))
             s.LlamaCppUrl = arg.Split('=', 2)[1];
+        else if (arg.StartsWith("--gemini-url=", StringComparison.OrdinalIgnoreCase))
+            s.GeminiUrl = arg.Split('=', 2)[1];
+        else if (arg.StartsWith("--openrouter-url=", StringComparison.OrdinalIgnoreCase))
+            s.OpenRouterUrl = arg.Split('=', 2)[1];
     }
 
     // Also honour the legacy environment variable
@@ -112,19 +121,17 @@ async Task RunSettingsMenu()
         Console.WriteLine("│             LLM Settings                     │");
         Console.WriteLine("├─────────────────────────────────────────────┤");
         Console.WriteLine($"│  Backend  : {settings.Backend,-33}│");
-        Console.WriteLine($"│  Model    : {settings.Model,-33}│");
+        Console.WriteLine($"│  Model    : {settings.ActiveModel,-33}│");
         Console.WriteLine($"│  Ctx size : {settings.ContextSize,-33}│");
-        Console.WriteLine($"│  Ollama   : {settings.OllamaUrl,-33}│");
-        Console.WriteLine($"│  llama.cpp: {settings.LlamaCppUrl,-33}│");
+        Console.WriteLine($"│  Endpoint : {settings.ActiveUrl,-33}│");
         Console.WriteLine("├─────────────────────────────────────────────┤");
-        Console.WriteLine("│  1. Change backend (Ollama / llama.cpp)      │");
+        Console.WriteLine("│  1. Change backend                           │");
         Console.WriteLine("│  2. Change model                             │");
         Console.WriteLine("│  3. Change context size                      │");
-        Console.WriteLine("│  4. Change Ollama URL                        │");
-        Console.WriteLine("│  5. Change llama.cpp URL                     │");
-        Console.WriteLine("│  6. Test connection                          │");
-        Console.WriteLine("│  7. Save & return                            │");
-        Console.WriteLine("│  8. Discard & return                         │");
+        Console.WriteLine("│  4. Change active endpoint                   │");
+        Console.WriteLine("│  5. Test connection                          │");
+        Console.WriteLine("│  6. Save & return                            │");
+        Console.WriteLine("│  7. Discard & return                         │");
         Console.WriteLine("└─────────────────────────────────────────────┘");
         Console.Write("Choice: ");
 
@@ -141,15 +148,12 @@ async Task RunSettingsMenu()
                 ChangeContextSize();
                 break;
             case "4":
-                ChangeUrl("Ollama URL", v => settings.OllamaUrl = v, settings.OllamaUrl);
+                ChangeActiveUrl();
                 break;
             case "5":
-                ChangeUrl("llama.cpp URL", v => settings.LlamaCppUrl = v, settings.LlamaCppUrl);
-                break;
-            case "6":
                 await TestConnection();
                 break;
-            case "7":
+            case "6":
                 settings.Save();
                 Console.WriteLine("✓ Settings saved to llm-settings.json.");
                 if (settings.IsLlamaCpp)
@@ -159,7 +163,7 @@ async Task RunSettingsMenu()
                         await StartLlamaServerAsync();
                 }
                 return;
-            case "8":
+            case "7":
                 // Reload from disk (discard in-memory edits)
                 var reloaded = LlmSettings.Load();
                 settings.Backend    = reloaded.Backend;
@@ -167,6 +171,12 @@ async Task RunSettingsMenu()
                 settings.ContextSize = reloaded.ContextSize;
                 settings.OllamaUrl  = reloaded.OllamaUrl;
                 settings.LlamaCppUrl = reloaded.LlamaCppUrl;
+                settings.GeminiUrl = reloaded.GeminiUrl;
+                settings.GeminiModel = reloaded.GeminiModel;
+                settings.OpenRouterUrl = reloaded.OpenRouterUrl;
+                settings.OpenRouterModel = reloaded.OpenRouterModel;
+                settings.OpenRouterAppUrl = reloaded.OpenRouterAppUrl;
+                settings.OpenRouterAppName = reloaded.OpenRouterAppName;
                 Console.WriteLine("Changes discarded.");
                 return;
             default:
@@ -182,23 +192,28 @@ async Task ChangeBackend()
     Console.WriteLine("  Available backends:");
     Console.WriteLine("    1. Ollama    (default, http://localhost:11434)");
     Console.WriteLine("    2. llama.cpp (http://localhost:8080)");
-    Console.Write("  Select backend [1/2]: ");
+    Console.WriteLine("    3. Gemini    (requires GEMINI_API_KEY)");
+    Console.WriteLine("    4. OpenRouter (requires OPENROUTER_API_KEY)");
+    Console.Write("  Select backend [1-4]: ");
     var input = Console.ReadLine()?.Trim();
 
     string newBackend;
-    if (input == "2")
+    newBackend = input switch
     {
-        newBackend   = "llamacpp";
-    }
-    else
-    {
-        newBackend   = "ollama";
-    }
+        "2" => "llamacpp",
+        "3" => "gemini",
+        "4" => "openrouter",
+        _ => "ollama"
+    };
 
     settings.Backend = newBackend;
 
     // If switching backends, automatically suggest models
     Console.WriteLine($"  Backend set to: {newBackend}");
+    if (settings.IsGemini && string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("GEMINI_API_KEY")))
+        Console.WriteLine("  Set GEMINI_API_KEY before connecting. Keys are not written to llm-settings.json.");
+    if (settings.IsOpenRouter && string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OPENROUTER_API_KEY")))
+        Console.WriteLine("  Set OPENROUTER_API_KEY before connecting. Keys are not written to llm-settings.json.");
     await ChangeModel();  // Let user pick a model for the new backend
 }
 
@@ -221,11 +236,19 @@ async Task ChangeModel()
     {
         var probe = settings.CreateClient();
         Console.WriteLine($"\n  Fetching available models from {settings.Backend}…");
-        models = await probe.ListModelsAsync();
+        try
+        {
+            models = await probe.ListModelsAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  Could not fetch models: {ex.Message}");
+            models = new List<string>();
+        }
         if (models.Count > 0)
             Console.WriteLine("  Available models:");
         else
-            Console.WriteLine("  (No models returned – is Ollama running?)");
+            Console.WriteLine("  (No models returned; you can enter a model ID manually.)");
     }
 
     if (models.Count > 0)
@@ -233,26 +256,26 @@ async Task ChangeModel()
         for (int i = 0; i < models.Count; i++)
             Console.WriteLine($"    {i + 1}. {models[i]}");
 
-        Console.Write($"  Select model number, or type a name directly [{settings.Model}]: ");
+        Console.Write($"  Select model number, or type a name directly [{settings.ActiveModel}]: ");
         var input = Console.ReadLine()?.Trim();
 
         if (string.IsNullOrEmpty(input))
             return; // Keep current
 
         if (int.TryParse(input, out var idx) && idx >= 1 && idx <= models.Count)
-            settings.Model = models[idx - 1];
+            SetActiveModel(models[idx - 1]);
         else
-            settings.Model = input;
+            SetActiveModel(input);
     }
     else
     {
-        Console.Write($"  Type model name [{settings.Model}]: ");
+        Console.Write($"  Type model name [{settings.ActiveModel}]: ");
         var input = Console.ReadLine()?.Trim();
         if (!string.IsNullOrEmpty(input))
-            settings.Model = input;
+            SetActiveModel(input);
     }
 
-    Console.WriteLine($"  Model set to: {settings.Model}");
+    Console.WriteLine($"  Model set to: {settings.ActiveModel}");
 
     // For llama.cpp, always show the launch command for the chosen model
     if (settings.IsLlamaCpp)
@@ -296,26 +319,33 @@ void ChangeContextSize()
 
 async Task TestConnection()
 {
-    var probe = settings.CreateClient();
-    Console.Write($"  Testing connection to {probe.BackendName} ({(settings.IsLlamaCpp ? settings.LlamaCppUrl : settings.OllamaUrl)})… ");
-    var ok = await probe.IsHealthyAsync();
-    Console.WriteLine(ok ? "✓ OK" : "✗ FAILED – is the server running?");
+    try
+    {
+        var probe = settings.CreateClient();
+        Console.Write($"  Testing connection to {probe.BackendName} ({settings.ActiveUrl})… ");
+        var ok = await probe.IsHealthyAsync();
+        Console.WriteLine(ok ? "✓ OK" : "✗ FAILED");
 
-    if (ok)
-    {
-        var models = await probe.ListModelsAsync();
-        Console.WriteLine($"  {models.Count} model(s) available: {string.Join(", ", models.Take(5))}{(models.Count > 5 ? "…" : "")}");
-    }
-    else if (settings.IsLlamaCpp)
-    {
-        Console.Write("  Start llama-server now? [y/N]: ");
-        if (Console.ReadLine()?.Trim().Equals("y", StringComparison.OrdinalIgnoreCase) == true)
-            await StartLlamaServerAsync();
-        else
+        if (ok)
         {
-            Console.WriteLine();
-            LlamaCppClient.PrintLaunchHint(settings.Model, settings.ContextSize);
+            var models = await probe.ListModelsAsync();
+            Console.WriteLine($"  {models.Count} model(s) available: {string.Join(", ", models.Take(5))}{(models.Count > 5 ? "…" : "")}");
         }
+        else if (settings.IsLlamaCpp)
+        {
+            Console.Write("  Start llama-server now? [y/N]: ");
+            if (Console.ReadLine()?.Trim().Equals("y", StringComparison.OrdinalIgnoreCase) == true)
+                await StartLlamaServerAsync();
+            else
+            {
+                Console.WriteLine();
+                LlamaCppClient.PrintLaunchHint(settings.Model, settings.ContextSize);
+            }
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"✗ {ex.Message}");
     }
 }
 
@@ -396,7 +426,7 @@ async Task RunReplayMode(bool useAgent = false)
         }
         else
         {
-            Console.WriteLine("Make sure Ollama is running: ollama serve");
+            PrintBackendSetupHint();
             return;
         }
     }
@@ -445,59 +475,8 @@ async Task RunReplayMode(bool useAgent = false)
 
         try
         {
-            // Create game state
-            var gameState = new GameState();
-            gameState.Rooms = game.Rooms;
-            gameState.NPCs = game.NPCs;
-            gameState.CurrentRoomId = game.StartingRoomId;
-
-            // Initialize player's starting currency if economy is enabled
-            if (game.Economy?.Enabled == true && game.StartingCurrency > 0)
-            {
-                gameState.Player.Wallet.Add(game.StartingCurrency);
-            }
-
-            // Add starting items to inventory
-            if (game.CustomSettings.ContainsKey("startingItems"))
-            {
-                try
-                {
-                    var startingItemsJson = game.CustomSettings["startingItems"];
-                    var startingItems = System.Text.Json.JsonSerializer.Deserialize<List<StartingItemDefinition>>(startingItemsJson);
-                    if (startingItems != null)
-                    {
-                        foreach (var startingItem in startingItems)
-                        {
-                            if (game.Items.TryGetValue(startingItem.ItemId, out var item))
-                            {
-                                gameState.PlayerInventory.AddItem(item, startingItem.Quantity);
-                            }
-                        }
-                    }
-                }
-                catch
-                {
-                    // Fallback to default
-                    foreach (var item in game.Items.Values)
-                    {
-                        if (item.Type == ItemType.Weapon || item.Type == ItemType.Armor)
-                        {
-                            gameState.PlayerInventory.AddItem(item, 1);
-                        }
-                    }
-                }
-            }
-            else
-            {
-                // Default behavior for static games
-                foreach (var item in game.Items.Values)
-                {
-                    if (item.Type == ItemType.Weapon || item.Type == ItemType.Armor)
-                    {
-                        gameState.PlayerInventory.AddItem(item, 1);
-                    }
-                }
-            }
+            // Every replay receives an isolated deterministic runtime world.
+            var gameState = GameStateFactory.Create(game);
 
             // Initialize Game Master
             var gameMaster = new GameMaster(gameState, llmClient, null, game);
@@ -606,8 +585,11 @@ async Task RunInteractiveMode()
     Console.WriteLine("\nPress any key to begin...");
     try { Console.ReadKey(); } catch { /* non-interactive */ }
 
-    // Check if the LLM backend is running
-    if (!await llmClient.IsHealthyAsync())
+    // LLM narration is optional. If the selected provider is unavailable, the
+    // authoritative command handlers and fallback parser still support direct
+    // gameplay commands.
+    var llmAvailable = await llmClient.IsHealthyAsync();
+    if (!llmAvailable)
     {
         Console.WriteLine($"\nERROR: Cannot connect to {llmClient.BackendName}.");
         if (settings.IsLlamaCpp)
@@ -615,65 +597,55 @@ async Task RunInteractiveMode()
             Console.Write("  Start llama-server now? [y/N]: ");
             if (Console.ReadLine()?.Trim().Equals("y", StringComparison.OrdinalIgnoreCase) == true)
             {
-                if (!await StartLlamaServerAsync()) { return; }
+                llmAvailable = await StartLlamaServerAsync();
             }
             else
             {
                 LlamaCppClient.PrintLaunchHint(settings.Model, settings.ContextSize);
                 Console.WriteLine("You can change the backend in Settings (option 3 on the main menu).");
+            }
+        }
+        else
+        {
+            PrintBackendSetupHint();
+            Console.WriteLine("You can change the backend in Settings (option 3 on the main menu).");
+        }
+
+        if (!llmAvailable)
+        {
+            Console.WriteLine("Continuing without LLM narration. Direct commands such as look, move, inventory, attack, gather, and craft remain available.");
+        }
+    }
+
+    // Continue a versioned save or create an isolated runtime world.
+    var saveService = new GameSaveService();
+    var savePath = GetSavePath(game.Id);
+    GameState gameState;
+    if (File.Exists(savePath))
+    {
+        Console.Write("A saved run exists. Continue it? [Y/n]: ");
+        var continueSaved = Console.ReadLine()?.Trim();
+        if (!string.Equals(continueSaved, "n", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                gameState = await saveService.LoadStateAsync(savePath);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Could not load that save: {ex.Message}");
+                Console.WriteLine("The save was left unchanged. Choose the game again and answer 'n' to start over.");
                 return;
             }
         }
         else
         {
-            Console.WriteLine("Make sure Ollama is running: ollama serve");
-            Console.WriteLine("You can change the backend in Settings (option 3 on the main menu).");
-            return;
-        }
-    }
-
-    // Create a GameState from the selected game
-    var gameState = new GameState();
-    gameState.Rooms = game.Rooms;
-    gameState.NPCs = game.NPCs;
-    gameState.CurrentRoomId = game.StartingRoomId;
-
-    // Initialize player's starting currency if economy is enabled
-    if (game.Economy?.Enabled == true && game.StartingCurrency > 0)
-    {
-        gameState.Player.Wallet.Add(game.StartingCurrency);
-    }
-
-    // Add starting items to player inventory
-    if (game.CustomSettings.ContainsKey("startingItems"))
-    {
-        try
-        {
-            var startingItemsJson = game.CustomSettings["startingItems"];
-            var startingItems = System.Text.Json.JsonSerializer.Deserialize<List<StartingItemDefinition>>(startingItemsJson);
-            if (startingItems != null)
-            {
-                foreach (var startingItem in startingItems)
-                {
-                    if (game.Items.TryGetValue(startingItem.ItemId, out var item))
-                    {
-                        gameState.PlayerInventory.AddItem(item, startingItem.Quantity);
-                    }
-                }
-            }
-        }
-        catch
-        {
-            foreach (var item in game.Items.Values)
-                if (item.Type == ItemType.Weapon || item.Type == ItemType.Armor)
-                    gameState.PlayerInventory.AddItem(item, 1);
+            gameState = GameStateFactory.Create(game);
         }
     }
     else
     {
-        foreach (var item in game.Items.Values)
-            if (item.Type == ItemType.Weapon || item.Type == ItemType.Armor)
-                gameState.PlayerInventory.AddItem(item, 1);
+        gameState = GameStateFactory.Create(game);
     }
 
     // Initialize the Game Master
@@ -688,7 +660,7 @@ async Task RunInteractiveMode()
     if (!string.IsNullOrWhiteSpace(game.Subtitle))
         Console.WriteLine(game.Subtitle);
     Console.WriteLine("This is a console-based adventure with LLM-powered NPCs.");
-    Console.WriteLine("Type 'help' for available actions.\n");
+    Console.WriteLine("Type 'help' for available actions. Progress autosaves after each action.\n");
 
     // Show initial game state
     var initialRoom = gameState.GetCurrentRoom();
@@ -716,10 +688,12 @@ async Task RunInteractiveMode()
         try
         {
             // Check for win condition
-            if (game.WinConditionRoomIds != null && game.WinConditionRoomIds.Contains(gameState.CurrentRoomId))
+            var victoryCheck = gameMaster.CheckWinCondition();
+            if ((game.WinConditionRoomIds?.Contains(gameState.CurrentRoomId) == true) ||
+                victoryCheck is { isVictory: true })
             {
                 Console.WriteLine("\n" + new string('=', 60));
-                Console.WriteLine("🎉 VICTORY! You have achieved the objective!");
+                Console.WriteLine($"🎉 {victoryCheck?.message ?? "VICTORY! You have achieved the objective!"}");
                 Console.WriteLine("=" + new string('=', 59));
                 break;
             }
@@ -733,8 +707,16 @@ async Task RunInteractiveMode()
             if (playerInput.Equals("quit", StringComparison.OrdinalIgnoreCase) ||
                 playerInput.Equals("exit", StringComparison.OrdinalIgnoreCase))
             {
+                await saveService.SaveAsync(savePath, gameState, game.Id);
                 Console.WriteLine("\nThanks for playing!");
                 break;
+            }
+
+            if (playerInput.Equals("save", StringComparison.OrdinalIgnoreCase))
+            {
+                await saveService.SaveAsync(savePath, gameState, game.Id);
+                Console.WriteLine($"✓ Saved turn {gameState.TurnNumber}.");
+                continue;
             }
 
             if (playerInput.Equals("help", StringComparison.OrdinalIgnoreCase))
@@ -746,10 +728,14 @@ async Task RunInteractiveMode()
             Console.WriteLine("\n⏳ Processing your action...");
             var actionNarration = await gameMaster.ProcessPlayerActionAsync(playerInput);
             Console.WriteLine($"\n{actionNarration}");
+            await saveService.SaveAsync(savePath, gameState, game.Id);
 
             sessionLog.WriteLine($"[{DateTime.Now:HH:mm:ss}] Player: {playerInput}");
             sessionLog.WriteLine($"[{DateTime.Now:HH:mm:ss}] Game: {actionNarration}");
             sessionLog.WriteLine();
+
+            if (gameMaster.CheckWinCondition() is { isVictory: true })
+                break;
         }
         catch (Exception ex)
         {
@@ -766,6 +752,47 @@ async Task RunInteractiveMode()
 
     sessionLog.Dispose();
     Console.WriteLine($"\n📝 Session log saved to: {sessionLogPath}");
+}
+
+void SetActiveModel(string model)
+{
+    if (settings.IsGemini)
+        settings.GeminiModel = model;
+    else if (settings.IsOpenRouter)
+        settings.OpenRouterModel = model;
+    else
+        settings.Model = model;
+}
+
+void ChangeActiveUrl()
+{
+    if (settings.IsLlamaCpp)
+        ChangeUrl("llama.cpp URL", value => settings.LlamaCppUrl = value, settings.LlamaCppUrl);
+    else if (settings.IsGemini)
+        ChangeUrl("Gemini URL", value => settings.GeminiUrl = value, settings.GeminiUrl);
+    else if (settings.IsOpenRouter)
+        ChangeUrl("OpenRouter URL", value => settings.OpenRouterUrl = value, settings.OpenRouterUrl);
+    else
+        ChangeUrl("Ollama URL", value => settings.OllamaUrl = value, settings.OllamaUrl);
+}
+
+static string GetSavePath(string gameId)
+{
+    var safeGameId = string.Concat(gameId.Where(character =>
+        char.IsLetterOrDigit(character) || character is '-' or '_'));
+    if (string.IsNullOrWhiteSpace(safeGameId))
+        safeGameId = "game";
+    return Path.Combine(Directory.GetCurrentDirectory(), "saves", $"{safeGameId}.json");
+}
+
+void PrintBackendSetupHint()
+{
+    if (settings.IsGemini)
+        Console.WriteLine("Set GEMINI_API_KEY and verify the Gemini endpoint/model in Settings.");
+    else if (settings.IsOpenRouter)
+        Console.WriteLine("Set OPENROUTER_API_KEY and verify the OpenRouter endpoint/model in Settings.");
+    else
+        Console.WriteLine("Make sure Ollama is running: ollama serve");
 }
 
 void RunEquipmentTest()

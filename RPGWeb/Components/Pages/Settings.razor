@@ -20,34 +20,43 @@
             <div class="setting-row">
                 <label>Backend</label>
                 <div class="setting-control">
-                    <select @bind="backend">
+                    <select @bind="backend" @bind:after="BackendChanged">
                         <option value="ollama">Ollama</option>
                         <option value="llamacpp">llama.cpp</option>
+                        <option value="gemini">Google Gemini</option>
+                        <option value="openrouter">OpenRouter</option>
                     </select>
                 </div>
             </div>
 
-            @if (backend == "llamacpp")
-            {
-                <div class="setting-row">
-                    <label>llama.cpp URL</label>
-                    <div class="setting-control">
-                        <input type="text" @bind="llamaCppUrl" placeholder="http://localhost:8080" />
-                        <small>HTTP endpoint for llama-server</small>
-                    </div>
+            <div class="setting-row">
+                <label>Endpoint</label>
+                <div class="setting-control">
+                    <code>Managed by the server</code>
+                    <small>Provider URLs can only be changed through trusted server configuration.</small>
                 </div>
-            }
-            else
-            {
-                <div class="setting-row">
-                    <label>Ollama URL</label>
-                    <div class="setting-control">
-                        <input type="text" @bind="ollamaUrl" placeholder="http://localhost:11434" />
-                        <small>HTTP endpoint for the Ollama service</small>
-                    </div>
-                </div>
-            }
+            </div>
 
+            @if (backend == "gemini")
+            {
+                <div class="setting-row">
+                    <label>API Key</label>
+                    <div class="setting-control">
+                        <code>GEMINI_API_KEY</code>
+                        <small>Set this environment variable on the server. Credentials are never accepted or exposed by the web UI.</small>
+                    </div>
+                </div>
+            }
+            else if (backend == "openrouter")
+            {
+                <div class="setting-row">
+                    <label>API Key</label>
+                    <div class="setting-control">
+                        <code>OPENROUTER_API_KEY</code>
+                        <small>Set this environment variable on the server. Credentials are never accepted or exposed by the web UI.</small>
+                    </div>
+                </div>
+            }
             <div class="setting-row">
                 <label>Model</label>
                 <div class="setting-control">
@@ -55,7 +64,7 @@
                         <input type="text" @bind="model" placeholder="granite4:3b" class="model-input" />
                         @if (backend != "llamacpp")
                         {
-                            <button class="btn-fetch" @onclick="FetchModelsAsync" disabled="@fetchingModels" title="Fetch available models from Ollama">
+                            <button class="btn-fetch" @onclick="FetchModelsAsync" disabled="@fetchingModels" title="Fetch available models from this provider">
                                 @(fetchingModels ? "⏳" : "🔍 Fetch")
                             </button>
                         }
@@ -77,17 +86,20 @@
                 </div>
             </div>
 
-            <div class="setting-row">
-                <label>Context Size</label>
-                <div class="setting-control">
-                    <div class="context-row">
-                        <input type="range" min="1024" max="131072" step="1024"
-                               @bind="contextSize" @bind:event="oninput" class="context-slider" />
-                        <span class="context-value">@contextSize.ToString("N0")</span>
+            @if (backend is "ollama" or "llamacpp")
+            {
+                <div class="setting-row">
+                    <label>Context Size</label>
+                    <div class="setting-control">
+                        <div class="context-row">
+                            <input type="range" min="1024" max="131072" step="1024"
+                                   @bind="contextSize" @bind:event="oninput" class="context-slider" />
+                            <span class="context-value">@contextSize.ToString("N0")</span>
+                        </div>
+                        <small>Token context window (affects memory usage and response quality)</small>
                     </div>
-                    <small>Token context window (affects memory usage and response quality)</small>
                 </div>
-            </div>
+            }
         </div>
 
         <!-- ── Connection Status ───────────────────────────────────── -->
@@ -103,8 +115,8 @@
             <button class="btn-action btn-test" @onclick="TestConnectionAsync" disabled="@busy">
                 @(testing ? "Testing…" : "🔌 Test Connection")
             </button>
-            <button class="btn-action btn-save" @onclick="SaveAsync" disabled="@busy">
-                @(saving ? "Saving…" : "💾 Save & Apply")
+            <button class="btn-action btn-save" @onclick="ApplyAsync" disabled="@busy">
+                @(saving ? "Applying…" : "Apply to This Session")
             </button>
             <button class="btn-action btn-reset" @onclick="ResetToDefaults" disabled="@busy">
                 ↩ Reset Defaults
@@ -113,7 +125,7 @@
 
         @if (saved)
         {
-            <p class="save-note">✅ Settings saved. They will be used for your next game.</p>
+            <p class="save-note">✅ Settings applied to this browser session. They will be used for your next game.</p>
         }
     </div>
 </div>
@@ -121,8 +133,6 @@
 @code {
     // Local copies of settings (edited without touching the live singleton)
     private string backend     = "ollama";
-    private string ollamaUrl   = "http://localhost:11434";
-    private string llamaCppUrl = "http://localhost:8080";
     private string model       = "granite4:3b";
     private int    contextSize = 8192;
 
@@ -141,10 +151,8 @@
     protected override void OnInitialized()
     {
         var s = Session.GetSettings();
-        backend     = s.IsLlamaCpp ? "llamacpp" : "ollama";
-        ollamaUrl   = s.OllamaUrl;
-        llamaCppUrl = s.LlamaCppUrl;
-        model       = s.Model;
+        backend     = s.IsLlamaCpp ? "llamacpp" : s.IsGemini ? "gemini" : s.IsOpenRouter ? "openrouter" : "ollama";
+        model       = s.ActiveModel;
         contextSize = s.ContextSize;
     }
 
@@ -155,18 +163,13 @@
         availableModels.Clear();
         try
         {
-            // Build a temporary client with the current URL to fetch models
-            var tmp = new CSharpRPGBackend.LLM.LlmSettings
-            {
-                Backend    = "ollama",
-                OllamaUrl  = ollamaUrl,
-                Model      = model,
-                ContextSize = contextSize
-            };
+            // Use the selected provider/model with only the provider endpoints
+            // that were loaded from trusted server configuration.
+            var tmp = BuildTempSettings();
             var client = tmp.CreateClient();
             availableModels = await client.ListModelsAsync();
             if (availableModels.Count == 0)
-                fetchError = "No models found (is Ollama running?)";
+                fetchError = "No models were returned by this provider.";
         }
         catch (Exception ex)
         {
@@ -176,6 +179,21 @@
         {
             fetchingModels = false;
         }
+    }
+
+    private void BackendChanged()
+    {
+        var s = Session.GetSettings();
+        model = backend switch
+        {
+            "gemini" => s.GeminiModel,
+            "openrouter" => s.OpenRouterModel,
+            _ => s.Model
+        };
+        availableModels.Clear();
+        fetchError = null;
+        statusMessage = null;
+        saved = false;
     }
 
     private async Task TestConnectionAsync()
@@ -189,7 +207,7 @@
             var healthy = await client.IsHealthyAsync();
             statusOk      = healthy;
             statusMessage = healthy
-                ? $"✅ Connected to {client.BackendName} at {(tmp.IsLlamaCpp ? tmp.LlamaCppUrl : tmp.OllamaUrl)}"
+                ? $"✅ Connected to {client.BackendName}"
                 : $"❌ Cannot reach {client.BackendName}";
         }
         catch (Exception ex)
@@ -203,7 +221,7 @@
         }
     }
 
-    private async Task SaveAsync()
+    private async Task ApplyAsync()
     {
         saving = true;
         saved  = false;
@@ -211,11 +229,10 @@
         {
             var s = Session.GetSettings();
             s.Backend     = backend;
-            s.OllamaUrl   = ollamaUrl;
-            s.LlamaCppUrl = llamaCppUrl;
-            s.Model       = model;
+            if (backend == "gemini") s.GeminiModel = model;
+            else if (backend == "openrouter") s.OpenRouterModel = model;
+            else s.Model = model;
             s.ContextSize = contextSize;
-            s.Save();
             Session.ApplySettings();
             // Refresh health status on the home page
             await Session.CheckLlmHealthAsync();
@@ -231,8 +248,6 @@
     {
         var defaults = new CSharpRPGBackend.LLM.LlmSettings();
         backend     = "ollama";
-        ollamaUrl   = defaults.OllamaUrl;
-        llamaCppUrl = defaults.LlamaCppUrl;
         model       = defaults.Model;
         contextSize = defaults.ContextSize;
         statusMessage = null;
@@ -241,12 +256,24 @@
         fetchError = null;
     }
 
-    private CSharpRPGBackend.LLM.LlmSettings BuildTempSettings() => new()
+    private CSharpRPGBackend.LLM.LlmSettings BuildTempSettings()
     {
-        Backend     = backend,
-        OllamaUrl   = ollamaUrl,
-        LlamaCppUrl = llamaCppUrl,
-        Model       = model,
-        ContextSize = contextSize
-    };
+        var trusted = Session.GetSettings();
+        return new CSharpRPGBackend.LLM.LlmSettings
+        {
+            Backend = backend,
+            OllamaUrl = trusted.OllamaUrl,
+            LlamaCppUrl = trusted.LlamaCppUrl,
+            GeminiUrl = trusted.GeminiUrl,
+            GeminiModel = model,
+            GeminiApiKey = trusted.GeminiApiKey,
+            OpenRouterUrl = trusted.OpenRouterUrl,
+            OpenRouterModel = model,
+            OpenRouterApiKey = trusted.OpenRouterApiKey,
+            OpenRouterAppUrl = trusted.OpenRouterAppUrl,
+            OpenRouterAppName = trusted.OpenRouterAppName,
+            Model = model,
+            ContextSize = contextSize
+        };
+    }
 }

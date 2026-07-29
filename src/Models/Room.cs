@@ -60,27 +60,30 @@ public class Room
     /// <summary>
     /// Try to find an exit by display name (case-insensitive, with fuzzy matching)
     /// </summary>
-    public Exit? FindExit(string displayName)
+    public Exit? FindExit(string displayName, bool availableOnly = true)
     {
-        var lowerInput = displayName.ToLower();
+        var lowerInput = displayName.Trim().ToLowerInvariant();
+
+        bool IsEligible(Exit candidate) => !availableOnly || candidate.IsAvailable;
 
         // First try exact match
         var exit = Exits.Values.FirstOrDefault(e =>
-            e.DisplayName.Equals(displayName, StringComparison.OrdinalIgnoreCase) && e.IsAvailable);
+            (e.DisplayName.Equals(displayName, StringComparison.OrdinalIgnoreCase) ||
+             e.Id.Equals(displayName, StringComparison.OrdinalIgnoreCase)) && IsEligible(e));
 
         if (exit != null)
             return exit;
 
         // Try partial/fuzzy match - check if exit name contains the input
         exit = Exits.Values.FirstOrDefault(e =>
-            e.DisplayName.ToLower().Contains(lowerInput) && e.IsAvailable);
+            e.DisplayName.Contains(lowerInput, StringComparison.OrdinalIgnoreCase) && IsEligible(e));
 
         if (exit != null)
             return exit;
 
         // Try if input contains the exit name (for short forms like "north" matching "North")
         exit = Exits.Values.FirstOrDefault(e =>
-            lowerInput.Contains(e.DisplayName.ToLower()) && e.IsAvailable);
+            lowerInput.Contains(e.DisplayName, StringComparison.OrdinalIgnoreCase) && IsEligible(e));
 
         return exit;
     }

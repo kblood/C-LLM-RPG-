@@ -30,6 +30,7 @@ public class Game
     public Dictionary<string, Character> NPCs { get; set; } = new();
     public Dictionary<string, Item> Items { get; set; } = new();
     public List<Quest> Quests { get; set; } = new();
+    public List<WorldProject> WorldProjects { get; set; } = new();
 
     // Game Progression
     public string StartingRoomId { get; set; } = "start";
@@ -76,6 +77,13 @@ public class Game
     /// Starting currency for the player (in base units).
     /// </summary>
     public long StartingCurrency { get; set; } = 0;
+
+    /// <summary>
+    /// Items placed in the player's inventory when a new game is created.
+    /// The key is an item ID from <see cref="Items"/> and the value is its quantity.
+    /// An empty collection intentionally means that the player starts without items.
+    /// </summary>
+    public Dictionary<string, int> StartingItems { get; set; } = new();
 
     // Game Master Authority
     /// <summary>

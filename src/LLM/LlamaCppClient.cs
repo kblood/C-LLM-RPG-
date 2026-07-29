@@ -561,7 +561,7 @@ internal class OpenAiMessage
     public string? Content { get; set; }
 }
 
-public class LlamaCppException : Exception
+public class LlamaCppException : LlmClientException
 {
     public LlamaCppException(string message, Exception? innerException = null)
         : base(message, innerException) { }

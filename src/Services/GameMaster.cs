@@ -23,7 +23,7 @@ public enum GameStateDisplayMode
 public class GameMaster
 {
     private readonly GameState _gameState;
-    private readonly ILlmClient _ollamaClient;
+    private readonly ILlmClient _llmClient;
     private readonly Dictionary<string, NpcBrain> _npcBrains;
     private readonly string _gmSystemPrompt;
     private readonly CombatService _combatService;
@@ -32,22 +32,35 @@ public class GameMaster
     private readonly EconomyConfig _economy;  // Economy configuration for this game
     private readonly GameMasterAuthority _authority;  // GM authority configuration
     private readonly CraftingConfig _crafting;  // Crafting configuration
-    private readonly Random _random = new();  // For gathering rolls
+    private readonly WorldSimulationService _worldSimulationService;
+    private readonly QuestProgressionService _questProgressionService;
+    private readonly WorldProjectService _worldProjectService;
     public bool DebugMode { get; set; } = false;  // Toggle for debug output
     public GameStateDisplayMode DisplayMode { get; set; } = GameStateDisplayMode.Standard;  // Footer display mode
 
-    public GameMaster(GameState gameState, ILlmClient ollamaClient, string? gmSystemPrompt = null, Game? game = null)
+    public GameMaster(
+        GameState gameState,
+        ILlmClient llmClient,
+        string? gmSystemPrompt = null,
+        Game? game = null,
+        WorldSimulationService? worldSimulationService = null,
+        QuestProgressionService? questProgressionService = null,
+        WorldProjectService? worldProjectService = null,
+        CombatService? combatService = null)
     {
         _gameState = gameState;
-        _ollamaClient = ollamaClient;
+        _llmClient = llmClient;
         _npcBrains = new();
         _gmSystemPrompt = gmSystemPrompt ?? GenerateDefaultGMPrompt();
-        _combatService = new CombatService();
+        _combatService = combatService ?? new CombatService();
         _game = game;
         _equipmentSlots = game?.GetEquipmentSlots() ?? EquipmentSlotConfiguration.CreateDefault();
         _economy = game?.GetEconomy() ?? EconomyConfig.Disabled();
         _authority = game?.GetAuthority() ?? GameMasterAuthority.Balanced();
         _crafting = game?.GetCrafting() ?? CraftingConfig.Disabled();
+        _worldSimulationService = worldSimulationService ?? new WorldSimulationService();
+        _questProgressionService = questProgressionService ?? new QuestProgressionService();
+        _worldProjectService = worldProjectService ?? new WorldProjectService();
 
         // Initialize NPC brains with custom personalities
         InitializeNpcBrains();
@@ -89,6 +102,8 @@ public class GameMaster
             if (cmdLower.StartsWith("go ") || cmdLower.StartsWith("move ") || cmdLower.StartsWith("attack ") ||
                 cmdLower.StartsWith("take ") || cmdLower.StartsWith("equip ") || cmdLower.StartsWith("use ") ||
                 cmdLower == "look" || cmdLower == "inventory" || cmdLower == "status" || cmdLower == "quests" ||
+                cmdLower == "projects" || cmdLower.StartsWith("accept ") || cmdLower.StartsWith("turn in ") ||
+                cmdLower.StartsWith("contribute ") || cmdLower.StartsWith("donate ") ||
                 cmdLower == "flee" || cmdLower == "auto")
             {
                 HandleEndChat();
@@ -97,8 +112,21 @@ public class GameMaster
             else
             {
                 // Send directly to NPC as a chat message (skip LLM decision step)
+                var beforeChat = CaptureActionSnapshot();
                 var chatResult = await HandleChatAsync(playerCommand.Trim());
-                return chatResult.Success ? chatResult.Message : $"❌ {chatResult.Message}";
+                var chatPlan = new ActionPlan
+                {
+                    Action = "chat",
+                    Target = _gameState.CurrentChatNpcId ?? string.Empty,
+                    Details = playerCommand.Trim()
+                };
+                var chatWorldUpdate = AdvanceWorld(
+                    playerCommand,
+                    new[] { chatPlan },
+                    new[] { ("chat", chatResult) },
+                    beforeChat);
+                var chatMessage = chatResult.Success ? chatResult.Message : $"❌ {chatResult.Message}";
+                return AppendWorldUpdates(chatMessage, chatWorldUpdate.Messages);
             }
         }
 
@@ -112,24 +140,32 @@ public class GameMaster
         }
 
         // Step 2: Execute those commands and collect results
+        var beforeAction = CaptureActionSnapshot();
         var executionResults = new List<(string action, ActionResult result)>();
         foreach (var action in commandsToExecute)
         {
+            var inventoryBeforeAction = CaptureInventoryQuantities();
             var result = await ApplyActionAsync(action, playerCommand);
+            AddInventoryGainEvents(action, result, inventoryBeforeAction);
             executionResults.Add((action.Action, result));
         }
 
         // For informational commands (status, inventory, look, equipped, quests, recipes, shop, help, display), 
         // return the result directly without narration or game state footer
-        var informationalCommands = new[] { "status", "inventory", "look", "equipped", "quests", "recipes", "shop", "help", "display" };
+        var informationalCommands = new[] { "status", "inventory", "look", "equipped", "quests", "projects", "recipes", "shop", "help", "display" };
         if (commandsToExecute.Count == 1 && informationalCommands.Contains(commandsToExecute[0].Action.ToLower()))
         {
             var result = executionResults[0].result;
             return result.Success ? result.Message : $"❌ {result.Message}";
         }
 
+        // A player intent advances deterministic world systems exactly once,
+        // even when the intent expands into multiple concrete actions.
+        var worldUpdate = AdvanceWorld(playerCommand, commandsToExecute, executionResults, beforeAction);
+
         // Step 3: Ask LLM to narrate based on original command + execution results
         var narration = await NarrateWithResultsAsync(playerCommand, commandsToExecute, executionResults);
+        narration = AppendWorldUpdates(narration, worldUpdate.Messages);
 
         // Step 4: Check for win condition after executing actions
         var victoryCheck = CheckWinCondition();
@@ -143,6 +179,245 @@ public class GameMaster
         var response = BuildGameResponse(narration);
 
         return response;
+    }
+
+    private ActionSnapshot CaptureActionSnapshot()
+    {
+        return new ActionSnapshot
+        {
+            RoomId = _gameState.CurrentRoomId,
+            PlayerLevel = _gameState.Player.Level,
+            NpcAlive = _gameState.NPCs.ToDictionary(
+                pair => pair.Key,
+                pair => pair.Value.IsAlive,
+                StringComparer.OrdinalIgnoreCase)
+        };
+    }
+
+    private Dictionary<string, int> CaptureInventoryQuantities() =>
+        _gameState.PlayerInventory.Items.ToDictionary(
+            pair => pair.Key,
+            pair => pair.Value.Quantity,
+            StringComparer.OrdinalIgnoreCase);
+
+    private void AddInventoryGainEvents(
+        ActionPlan plan,
+        ActionResult result,
+        IReadOnlyDictionary<string, int> quantitiesBeforeAction)
+    {
+        if (!result.Success)
+            return;
+
+        var eventType = plan.Action.Trim().ToLowerInvariant() switch
+        {
+            "craft" => WorldEventType.ItemCrafted,
+            "gather" or "search" => WorldEventType.ItemGathered,
+            _ => WorldEventType.ItemAcquired
+        };
+
+        foreach (var (itemId, inventoryItem) in _gameState.PlayerInventory.Items)
+        {
+            var gained = inventoryItem.Quantity - quantitiesBeforeAction.GetValueOrDefault(itemId);
+            if (gained <= 0)
+                continue;
+
+            result.Events.Add(WorldEvent.Create(
+                eventType,
+                targetId: itemId,
+                quantity: gained,
+                actorId: _gameState.Player.Id,
+                roomId: _gameState.CurrentRoomId));
+        }
+    }
+
+    private WorldTurnOutcome AdvanceWorld(
+        string playerCommand,
+        IReadOnlyList<ActionPlan> plans,
+        IReadOnlyList<(string action, ActionResult result)> executionResults,
+        ActionSnapshot before)
+    {
+        if (!plans.Any(ConsumesTurn))
+            return new WorldTurnOutcome();
+
+        var events = new List<WorldEvent>
+        {
+            WorldEvent.Create(
+                WorldEventType.PlayerCommand,
+                targetId: playerCommand,
+                actorId: _gameState.Player.Id,
+                roomId: _gameState.CurrentRoomId)
+        };
+
+        var actionEvents = executionResults
+            .Where(execution => execution.result.Success)
+            .SelectMany(execution => execution.result.Events)
+            .ToList();
+        foreach (var actionEvent in actionEvents)
+        {
+            // Some domain services journal immediately. Re-stamp those events on
+            // the intent's turn before the simulation records the shared object.
+            actionEvent.Id = string.Empty;
+            actionEvent.TurnNumber = 0;
+            events.Add(actionEvent);
+        }
+
+        if (!before.RoomId.Equals(_gameState.CurrentRoomId, StringComparison.OrdinalIgnoreCase))
+        {
+            events.Add(WorldEvent.Create(
+                WorldEventType.RoomEntered,
+                targetId: _gameState.CurrentRoomId,
+                actorId: _gameState.Player.Id,
+                roomId: _gameState.CurrentRoomId));
+        }
+
+        foreach (var (npcId, wasAlive) in before.NpcAlive)
+        {
+            if (wasAlive && _gameState.NPCs.TryGetValue(npcId, out var npc) && !npc.IsAlive)
+            {
+                events.Add(WorldEvent.Create(
+                    WorldEventType.NpcDefeated,
+                    targetId: npcId,
+                    actorId: _gameState.Player.Id,
+                    roomId: _gameState.CurrentRoomId));
+            }
+        }
+
+        for (var index = 0; index < Math.Min(plans.Count, executionResults.Count); index++)
+        {
+            if (!executionResults[index].result.Success)
+                continue;
+
+            var action = plans[index].Action.Trim().ToLowerInvariant();
+            if (action is not ("talk" or "chat" or "say"))
+                continue;
+
+            var npcId = ResolveNpcId(plans[index].Target) ?? _gameState.CurrentChatNpcId;
+            if (!string.IsNullOrWhiteSpace(npcId))
+            {
+                events.Add(WorldEvent.Create(
+                    WorldEventType.NpcTalkedTo,
+                    targetId: npcId,
+                    actorId: _gameState.Player.Id,
+                    roomId: _gameState.CurrentRoomId));
+            }
+        }
+
+        if (_gameState.Player.Level > before.PlayerLevel)
+        {
+            events.Add(WorldEvent.Create(
+                WorldEventType.PlayerLeveled,
+                targetId: _gameState.Player.Level.ToString(),
+                actorId: _gameState.Player.Id,
+                roomId: _gameState.CurrentRoomId,
+                message: $"You reached level {_gameState.Player.Level}!"));
+        }
+
+        var simulationResult = _worldSimulationService.AdvanceTurn(_gameState, events);
+        var levelBeforeQuestRewards = _gameState.Player.Level;
+        var questResult = _questProgressionService.Process(_gameState, _game, simulationResult.Events);
+        var postQuestEvents = questResult.Events.ToList();
+        var progressionMessages = new List<string>();
+        if (_gameState.Player.Level > levelBeforeQuestRewards)
+        {
+            var levelEvent = WorldEvent.Create(
+                WorldEventType.PlayerLeveled,
+                targetId: _gameState.Player.Level.ToString(),
+                actorId: _gameState.Player.Id,
+                roomId: _gameState.CurrentRoomId,
+                message: $"You reached level {_gameState.Player.Level}!");
+            levelEvent.TurnNumber = _gameState.TurnNumber;
+            WorldEventJournal.Record(_gameState, levelEvent, "progression");
+            postQuestEvents.Add(levelEvent);
+            progressionMessages.Add(levelEvent.Message!);
+        }
+
+        var projectResult = _worldProjectService.Process(
+            _gameState,
+            simulationResult.Events.Concat(postQuestEvents));
+        var messages = simulationResult.Messages
+            .Concat(questResult.Messages)
+            .Concat(progressionMessages)
+            .Concat(projectResult.Messages)
+            .ToList();
+
+        return new WorldTurnOutcome
+        {
+            Events = simulationResult.Events
+                .Concat(postQuestEvents)
+                .Concat(projectResult.Events)
+                .ToList(),
+            Messages = messages.Distinct(StringComparer.Ordinal).ToList()
+        };
+    }
+
+    private static bool ConsumesTurn(ActionPlan plan)
+    {
+        return plan.Action.Trim().ToLowerInvariant() is not
+            ("status" or "inventory" or "look" or "equipped" or "quests" or
+             "recipes" or "shop" or "help" or "display" or "projects" or "unknown" or
+             "end_chat" or "bye");
+    }
+
+    private string? ResolveNpcId(string? npcNameOrId)
+    {
+        if (string.IsNullOrWhiteSpace(npcNameOrId))
+            return null;
+
+        if (_gameState.NPCs.ContainsKey(npcNameOrId))
+            return npcNameOrId;
+
+        return _gameState.NPCs.FirstOrDefault(pair =>
+            pair.Value.Name.Contains(npcNameOrId, StringComparison.OrdinalIgnoreCase) ||
+            npcNameOrId.Contains(pair.Value.Name, StringComparison.OrdinalIgnoreCase)).Key;
+    }
+
+    private WorldProject? ResolveProject(string? projectNameOrId)
+    {
+        if (string.IsNullOrWhiteSpace(projectNameOrId))
+            return null;
+
+        var normalized = projectNameOrId.Replace('_', ' ').Trim();
+        return _gameState.WorldProjects.FirstOrDefault(project =>
+            project.Id.Equals(projectNameOrId, StringComparison.OrdinalIgnoreCase) ||
+            project.Name.Equals(projectNameOrId, StringComparison.OrdinalIgnoreCase) ||
+            project.Name.Contains(normalized, StringComparison.OrdinalIgnoreCase) ||
+            project.Name.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .Where(word => word.Length >= 4)
+                .Any(word => normalized.Contains(word.Trim('\'', ',', '.'), StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private Quest? ResolveQuest(string? questNameOrId)
+    {
+        if (string.IsNullOrWhiteSpace(questNameOrId))
+            return null;
+
+        return _gameState.ActiveQuests.FirstOrDefault(quest =>
+            quest.Id.Equals(questNameOrId, StringComparison.OrdinalIgnoreCase) ||
+            quest.Title.Equals(questNameOrId, StringComparison.OrdinalIgnoreCase) ||
+            quest.Title.Contains(questNameOrId, StringComparison.OrdinalIgnoreCase) ||
+            questNameOrId.Contains(quest.Title, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string AppendWorldUpdates(string narrative, IEnumerable<string> messages)
+    {
+        var updates = messages.Where(message => !string.IsNullOrWhiteSpace(message)).ToList();
+        if (updates.Count == 0)
+            return narrative;
+
+        return $"{narrative.TrimEnd()}\n\n🌍 World updates:\n{string.Join("\n", updates.Select(message => $"• {message}"))}";
+    }
+
+    private sealed class ActionSnapshot
+    {
+        public string RoomId { get; init; } = string.Empty;
+        public int PlayerLevel { get; init; }
+        public Dictionary<string, bool> NpcAlive { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private sealed class WorldTurnOutcome
+    {
+        public List<WorldEvent> Events { get; init; } = new();
+        public List<string> Messages { get; init; } = new();
     }
 
     /// <summary>
@@ -206,6 +481,7 @@ public class GameMaster
 
         // Always show location and health
         response.AppendLine($"📍 **Location:** {currentRoom.Name}");
+        response.AppendLine($"🕰️ **Turn:** {_gameState.TurnNumber} | ⭐ **Level:** {_gameState.Player.Level}");
         
         // Health line - add combat stats in Detailed mode
         if (DisplayMode == GameStateDisplayMode.Detailed)
@@ -296,7 +572,7 @@ Adjacent locations: {string.Join(", ", currentRoom.GetAvailableExits().Select(e 
             new() { Role = "user", Content = $"Describe this game state:\n{context}" }
         };
 
-        return await _ollamaClient.ChatAsync(messages);
+        return await _llmClient.ChatAsync(messages);
     }
 
     /// <summary>
@@ -308,7 +584,7 @@ Adjacent locations: {string.Join(", ", currentRoom.GetAvailableExits().Select(e 
         var currentRoom = _gameState.GetCurrentRoom();
 
         // Build context about available actions
-        var availableExits = currentRoom.GetAvailableExits();
+        var knownExits = currentRoom.Exits.Values.ToList();
         var npcList = string.Join(", ", currentRoom.NPCIds
             .Where(id => _gameState.NPCs.ContainsKey(id))
             .Select(id => $"{_gameState.NPCs[id].Name} ({(_gameState.NPCs[id].IsAlive ? "alive" : "dead")})"));
@@ -339,14 +615,23 @@ Adjacent locations: {string.Join(", ", currentRoom.GetAvailableExits().Select(e 
             npcInventoryList = "\nNPC inventory: " + string.Join("; ", npcItems);
         }
 
-        var exitsList = availableExits.Count > 0
-            ? string.Join(", ", availableExits.Select(e => e.DisplayName))
+        var exitsList = knownExits.Count > 0
+            ? string.Join(", ", knownExits.Select(exit =>
+                exit.IsAvailable ? exit.DisplayName : $"{exit.DisplayName} [blocked: {exit.UnavailableReason ?? "unavailable"}]"))
+            : "None";
+        var questList = _gameState.ActiveQuests.Count > 0
+            ? string.Join(", ", _gameState.ActiveQuests.Select(quest => $"{quest.Title} [{quest.Id}, {quest.Status}]"))
+            : "None";
+        var projectList = _gameState.WorldProjects.Count > 0
+            ? string.Join(", ", _gameState.WorldProjects.Select(project => $"{project.Name} [{project.Id}, {project.Status}]"))
             : "None";
 
         var context = $@"Current Location: {currentRoom.Name}
 Available exits: {exitsList}
 NPCs here: {(string.IsNullOrEmpty(npcList) ? "None" : npcList)}{npcInventoryList}
 Your inventory: {(string.IsNullOrEmpty(playerItemList) ? "Empty" : playerItemList)}
+Quests: {questList}
+World projects: {projectList}
 Player health: {_gameState.Player.Health}/{_gameState.Player.MaxHealth}
 In combat: {_gameState.InCombatMode}";
 
@@ -368,7 +653,7 @@ IMPORTANT: 'target' MUST contain the specific thing the player referred to:
 - For 'look' -> ""target"":""""
 - For 'inventory' -> ""target"":""""
 
-Valid actions: move, look, inventory, talk, follow, examine, take, drop, use, attack, auto, give, equip, unequip, equipped, buy, sell, shop, gather, search, craft, recipes, quests, stop, status, display, help
+Valid actions: move, look, inventory, talk, follow, examine, take, drop, use, attack, auto, give, equip, unequip, equipped, buy, sell, shop, gather, search, craft, recipes, quests, accept, turnin, projects, contribute, stop, status, display, help
 
 COMMAND MODIFIERS:
 - 'status' has optional target: empty = simple status (health, exits, NPCs), 'detailed'/'stats'/'advanced' = full combat stats
@@ -400,6 +685,10 @@ GATHERING & CRAFTING:
 - craft: Player wants to craft an item or ask NPC to craft. Target = NPC name (if asking NPC). Details = item to craft
 - recipes: Player wants to see available recipes. Target = NPC name (optional, for NPC recipes)
 - quests: Player wants to see their quest log
+- accept: Player wants to accept a quest. Target = quest ID or title
+- turnin: Player wants to turn in a completed quest. Target = quest ID or title
+- projects: Player wants to view long-running world projects
+- contribute: Player wants to donate materials to a project. Target = project ID or name, Details = item name and optional quantity
 
 Examples of CORRECT responses:
 Player says 'attack chen' -> [{""action"":""attack"",""target"":""Dr. Sarah Chen"",""details"":""""}]
@@ -433,6 +722,8 @@ Player says 'detailed status' OR 'stats' -> [{""action"":""status"",""target"":"
 Player says 'inventory' -> [{""action"":""inventory"",""target"":"""",""details"":""""}]
 Player says 'detailed inventory' OR 'show equipped' -> [{""action"":""inventory"",""target"":""detailed"",""details"":""""}]
 Player says 'check my quests' -> [{""action"":""quests"",""target"":"""",""details"":""""}]
+Player says 'show projects' -> [{""action"":""projects"",""target"":"""",""details"":""""}]
+Player says 'contribute 3 iron ore to the forgeworks' -> [{""action"":""contribute"",""target"":""ravensholm_forgeworks"",""details"":""3 iron ore""}]
 Player says 'display minimal' OR 'minimal ui' -> [{""action"":""display"",""target"":""minimal"",""details"":""""}]
 Player says 'display standard' -> [{""action"":""display"",""target"":""standard"",""details"":""""}]
 
@@ -457,11 +748,11 @@ Player says 'flee' (IN COMBAT) -> [{""action"":""stop"",""target"":"""",""detail
 
         try
         {
-            var response = await _ollamaClient.ChatAsync(messages);
+            var response = await _llmClient.ChatAsync(messages);
 
             // DEBUG: Log the raw LLM response
             DebugLog("[DEBUG] LLM Response:");
-            Console.WriteLine(response);
+            DebugLog(response);
             DebugLog("[DEBUG] ---");
 
             var actionPlans = ParseActionJsonArray(response);
@@ -663,8 +954,19 @@ CRITICAL RULES:
                 new() { Role = "user", Content = context }
             };
 
-            var narrative = await _ollamaClient.ChatAsync(messages);
-            output.AppendLine(narrative);
+            try
+            {
+                var narrative = await _llmClient.ChatAsync(messages);
+                output.AppendLine(narrative);
+            }
+            catch (Exception ex)
+            {
+                // The authoritative action has already committed. Preserve its
+                // result (and allow hosts to autosave it) when narration is down.
+                DebugLog($"[DEBUG] Narration unavailable; using action results: {ex.Message}");
+                foreach (var (_, result) in narratedActions)
+                    output.AppendLine(result.Success ? result.Message : $"❌ {result.Message}");
+            }
         }
 
         return output.ToString().TrimEnd();
@@ -790,6 +1092,14 @@ CRITICAL RULES:
 
         // Quest commands
         actions.Insert(actions.Count - 1, "quests - View your quest log");
+        actions.Insert(actions.Count - 1, "accept [quest] - Accept an available quest");
+        actions.Insert(actions.Count - 1, "turn in [quest] - Turn in a completed quest");
+
+        if (_gameState.WorldProjects.Count > 0)
+        {
+            actions.Insert(actions.Count - 1, "projects - View changes you can help bring to the world");
+            actions.Insert(actions.Count - 1, "contribute [quantity] [item] to [project] - Supply a world project");
+        }
 
         if (_gameState.InCombatMode)
         {
@@ -839,7 +1149,7 @@ CRITICAL RULES:
         foreach (var npc in _gameState.NPCs.Values)
         {
             var systemPrompt = npc.PersonalityPrompt ?? GenerateNpcPersonality(npc);
-            _npcBrains[npc.Id] = new NpcBrain(_ollamaClient, npc, systemPrompt);
+            _npcBrains[npc.Id] = new NpcBrain(_llmClient, npc, systemPrompt);
         }
     }
 
@@ -881,7 +1191,7 @@ RULES:
 
         try
         {
-            var response = await _ollamaClient.ChatAsync(messages);
+            var response = await _llmClient.ChatAsync(messages);
             DebugLog($"[DEBUG] NPC Give Decision Response:\n{response}\n[DEBUG] ---");
 
             return ParseGiveDecisionJson(response);
@@ -927,6 +1237,47 @@ RULES:
         var lower = playerCommand.ToLower().Trim();
         DebugLog($"[DEBUG] TryParseFallback: '{playerCommand}' -> '{lower}'");
 
+        if (lower is "projects" or "project" or "world projects" or "show projects")
+            return new ActionPlan { Action = "projects" };
+
+        if (lower.StartsWith("accept "))
+        {
+            var questName = Regex.Replace(playerCommand.Trim(), "^accept\\s+(quest\\s+)?", "", RegexOptions.IgnoreCase);
+            return new ActionPlan { Action = "accept", Target = questName };
+        }
+
+        if (lower.StartsWith("turn in ") || lower.StartsWith("turnin ") || lower.StartsWith("complete quest "))
+        {
+            var questName = Regex.Replace(
+                playerCommand.Trim(),
+                "^(turn\\s+in|turnin|complete\\s+quest)\\s+",
+                "",
+                RegexOptions.IgnoreCase);
+            return new ActionPlan { Action = "turnin", Target = questName };
+        }
+
+        if (lower.StartsWith("contribute ") || lower.StartsWith("donate "))
+        {
+            var contribution = Regex.Replace(
+                playerCommand.Trim(),
+                "^(contribute|donate)\\s+",
+                "",
+                RegexOptions.IgnoreCase);
+            var toIndex = contribution.LastIndexOf(" to ", StringComparison.OrdinalIgnoreCase);
+            var contributionDetails = toIndex >= 0 ? contribution[..toIndex].Trim() : contribution;
+            var requestedProject = toIndex >= 0 ? contribution[(toIndex + 4)..].Trim() : string.Empty;
+            var project = ResolveProject(requestedProject) ??
+                          _gameState.WorldProjects.FirstOrDefault(candidate =>
+                              candidate.Status is WorldProjectStatus.Available or WorldProjectStatus.Active);
+
+            return new ActionPlan
+            {
+                Action = "contribute",
+                Target = project?.Id ?? requestedProject,
+                Details = contributionDetails
+            };
+        }
+
         // Check for direction keywords
         var directions = new[] { "north", "south", "east", "west", "up", "down", "left", "right", "forward" };
         foreach (var dir in directions)
@@ -934,7 +1285,7 @@ RULES:
             if (lower == dir || lower.Contains($"go {dir}") || lower.Contains($"travel {dir}") || lower.Contains($"{dir}"))
             {
                 // Check if this direction exists in current room
-                var exit = currentRoom.FindExit(dir);
+                var exit = currentRoom.FindExit(dir, availableOnly: false);
                 if (exit != null)
                 {
                     return new ActionPlan { Action = "move", Target = dir, Details = "" };
@@ -943,7 +1294,7 @@ RULES:
         }
 
         // Check for direction names from available exits (fuzzy keyword matching)
-        var exits = currentRoom.GetAvailableExits();
+        var exits = currentRoom.Exits.Values.ToList();
         foreach (var exit in exits)
         {
             var exitNameLower = exit.DisplayName.ToLower();
@@ -1321,7 +1672,7 @@ MATCHING STRATEGY:
 
         try
         {
-            var response = await _ollamaClient.ChatAsync(messages);
+            var response = await _llmClient.ChatAsync(messages);
             var plan = ParseActionJson(response);
 
             // Fallback parser: If the LLM couldn't parse it or returned "unknown",
@@ -1380,6 +1731,8 @@ MATCHING STRATEGY:
             if (actionLower != "move" && actionLower != "attack" && actionLower != "take" &&
                 actionLower != "equip" && actionLower != "use" && actionLower != "inventory" &&
                 actionLower != "status" && actionLower != "look" && actionLower != "quests" &&
+                actionLower != "accept" && actionLower != "turnin" && actionLower != "projects" &&
+                actionLower != "contribute" &&
                 actionLower != "help" && actionLower != "shop" && actionLower != "buy" &&
                 actionLower != "sell" && actionLower != "drop" && actionLower != "examine" &&
                 actionLower != "unequip" && actionLower != "equipped" && actionLower != "gather" &&
@@ -1424,6 +1777,10 @@ MATCHING STRATEGY:
             "end_chat" => HandleEndChat(),
             "bye" => HandleEndChat(),
             "quests" => HandleQuests(),
+            "accept" => HandleAcceptQuest(plan.Target),
+            "turnin" => HandleTurnInQuest(plan.Target),
+            "projects" => HandleProjects(),
+            "contribute" => HandleProjectContribution(plan.Target, plan.Details),
             "help" => HandleHelp(),
             "status" => HandleStatus(plan.Target),
             "display" => HandleDisplayMode(plan.Target),
@@ -1485,7 +1842,7 @@ Action Result: {result.Message}";
             new() { Role = "user", Content = $"Narrate this game outcome:\n{context}" }
         };
 
-        return await _ollamaClient.ChatAsync(messages);
+        return await _llmClient.ChatAsync(messages);
     }
 
     private ActionResult HandleMove(string exitName)
@@ -1504,7 +1861,7 @@ Action Result: {result.Message}";
         DebugLog($"[DEBUG] Available exits: {string.Join(", ", availableExits.Select(e => e.DisplayName))}");
 
         // Try to find the exit
-        var exit = currentRoom.FindExit(exitName);
+        var exit = currentRoom.FindExit(exitName, availableOnly: false);
         if (exit == null)
         {
             DebugLog($"[DEBUG] HandleMove: exit '{exitName}' not found");
@@ -1515,9 +1872,21 @@ Action Result: {result.Message}";
             };
         }
 
+        var unlockMessage = string.Empty;
+        var requiresAccessItem = !string.IsNullOrWhiteSpace(exit.RequiredItemId) ||
+                                 !string.IsNullOrWhiteSpace(exit.RequiredKeyId);
+        if (!exit.IsAvailable || requiresAccessItem)
+        {
+            if (!TryUnlockExit(exit, out unlockMessage))
+            {
+                var reason = exit.UnavailableReason ?? "That route is unavailable.";
+                return new ActionResult { Success = false, Message = $"You cannot use {exit.DisplayName}: {reason}" };
+            }
+        }
+
         DebugLog($"[DEBUG] HandleMove: found exit, destination room='{exit.DestinationRoomId}'");
 
-        if (_gameState.MoveToRoomByExit(exitName))
+        if (_gameState.MoveToRoomByExit(exit.DisplayName))
         {
             var newRoom = _gameState.GetCurrentRoom();
             DebugLog($"[DEBUG] HandleMove: successfully moved to '{newRoom.Name}'");
@@ -1531,12 +1900,48 @@ Action Result: {result.Message}";
             return new ActionResult
             {
                 Success = true,
-                Message = $"You go {exitName}. You arrive at {newRoom.Name}."
+                Message = string.IsNullOrWhiteSpace(unlockMessage)
+                    ? $"You go {exit.DisplayName}. You arrive at {newRoom.Name}."
+                    : $"{unlockMessage} You go {exit.DisplayName} and arrive at {newRoom.Name}."
             };
         }
 
         DebugLog($"[DEBUG] HandleMove: MoveToRoomByExit returned false");
         return new ActionResult { Success = false, Message = "Cannot move there." };
+    }
+
+    private bool TryUnlockExit(Exit exit, out string message)
+    {
+        message = string.Empty;
+        var inventory = _gameState.PlayerInventory.Items.Values;
+
+        if (!string.IsNullOrWhiteSpace(exit.RequiredItemId) &&
+            !inventory.Any(entry => entry.Item.Id.Equals(exit.RequiredItemId, StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(exit.RequiredKeyId))
+        {
+            var hasKey = inventory.Any(entry =>
+                entry.Item.Id.Equals(exit.RequiredKeyId, StringComparison.OrdinalIgnoreCase) ||
+                (entry.Item.IsKey &&
+                 (entry.Item.UnlocksId?.Equals(exit.Id, StringComparison.OrdinalIgnoreCase) == true ||
+                  entry.Item.UnlocksId?.Equals(exit.RequiredKeyId, StringComparison.OrdinalIgnoreCase) == true)));
+            if (!hasKey)
+                return false;
+        }
+
+        // Some exits are disabled by world state rather than a portable key.
+        if (string.IsNullOrWhiteSpace(exit.RequiredItemId) && string.IsNullOrWhiteSpace(exit.RequiredKeyId))
+            return false;
+
+        exit.IsAvailable = true;
+        exit.UnavailableReason = null;
+        exit.RequiredItemId = null;
+        exit.RequiredKeyId = null;
+        message = "The way unlocks with the item you carry.";
+        return true;
     }
 
     private ActionResult HandleLook()
@@ -1550,6 +1955,16 @@ Action Result: {result.Message}";
         {
             message += "You can go: " + string.Join(", ", exits.Select(e => e.DisplayName)) + "\n";
         }
+
+        var blockedExits = room.Exits.Values.Where(exit => !exit.IsAvailable).ToList();
+        if (blockedExits.Count > 0)
+        {
+            message += "Blocked routes: " + string.Join(", ", blockedExits.Select(exit =>
+                $"{exit.DisplayName} ({exit.UnavailableReason ?? "unavailable"})")) + "\n";
+        }
+
+        if (room.Items.Count > 0)
+            message += "On the ground: " + string.Join(", ", room.Items.Select(item => item.Name)) + "\n";
 
         // Add NPCs
         if (room.NPCIds.Count > 0)
@@ -1635,23 +2050,31 @@ Action Result: {result.Message}";
         _gameState.InChatMode = true;
         _gameState.CurrentChatNpcId = npc.Id;
 
-        // Get the NPC's response via their brain
-        string npcResponse = "";
+        // Get the NPC's response via their brain. Dialogue generation is
+        // presentation: a provider outage must not leave a half-applied action.
+        var npcResponse = "I hear you, but I cannot find the words just now.";
         if (_npcBrains.ContainsKey(npc.Id))
         {
-            // STEP 1: Use LLM to convert player's raw command into a natural message for the NPC
-            string messageToNpc;
-            if (string.IsNullOrWhiteSpace(playerQuestion))
+            try
             {
-                messageToNpc = "The player greets you.";
-            }
-            else
-            {
-                messageToNpc = await ConvertPlayerCommandToNpcMessageAsync(playerQuestion, npc.Name);
-            }
+                // STEP 1: Use LLM to convert player's raw command into a natural message for the NPC
+                string messageToNpc;
+                if (string.IsNullOrWhiteSpace(playerQuestion))
+                {
+                    messageToNpc = "The player greets you.";
+                }
+                else
+                {
+                    messageToNpc = await ConvertPlayerCommandToNpcMessageAsync(playerQuestion, npc.Name);
+                }
 
-            // STEP 2: Send the converted message to the NPC for their response
-            npcResponse = await _npcBrains[npc.Id].RespondToPlayerAsync(messageToNpc);
+                // STEP 2: Send the converted message to the NPC for their response
+                npcResponse = await _npcBrains[npc.Id].RespondToPlayerAsync(messageToNpc);
+            }
+            catch (Exception ex)
+            {
+                DebugLog($"[DEBUG] NPC dialogue unavailable; using fallback: {ex.Message}");
+            }
         }
 
         // Return the NPC's actual response as the message
@@ -1674,13 +2097,27 @@ Action Result: {result.Message}";
             return new ActionResult { Success = false, Message = "That NPC is no longer available." };
         }
 
+        if (!_gameState.GetCurrentRoom().NPCIds.Contains(npc.Id, StringComparer.OrdinalIgnoreCase))
+        {
+            _gameState.InChatMode = false;
+            _gameState.CurrentChatNpcId = null;
+            return new ActionResult { Success = false, Message = $"{npc.Name} is no longer here." };
+        }
+
         if (string.IsNullOrWhiteSpace(message))
             return new ActionResult { Success = false, Message = "Say something! Or type 'leave' to end the conversation." };
 
-        string npcResponse = "";
+        var npcResponse = "I hear you, but I cannot find the words just now.";
         if (_npcBrains.TryGetValue(npc.Id, out var brain))
         {
-            npcResponse = await brain.RespondToPlayerAsync(message);
+            try
+            {
+                npcResponse = await brain.RespondToPlayerAsync(message);
+            }
+            catch (Exception ex)
+            {
+                DebugLog($"[DEBUG] NPC dialogue unavailable; using fallback: {ex.Message}");
+            }
         }
 
         return new ActionResult { Success = true, Message = $"{npc.Name} says: \"{npcResponse}\"" };
@@ -1866,7 +2303,7 @@ RULES:
 
         try
         {
-            var response = await _ollamaClient.ChatAsync(messages);
+            var response = await _llmClient.ChatAsync(messages);
             DebugLog($"[DEBUG] NPC Follow Decision Response:\n{response}\n[DEBUG] ---");
 
             return ParseFollowDecisionJson(response);
@@ -2382,6 +2819,22 @@ RULES:
         var room = _gameState.GetCurrentRoom();
         var itemLower = itemName.ToLower();
 
+        // Items authored on the room floor are real runtime objects and can be
+        // picked up independently of NPC loot.
+        var floorItem = room.Items.FirstOrDefault(item =>
+            item.Id.Equals(itemName, StringComparison.OrdinalIgnoreCase) ||
+            item.Name.Contains(itemName, StringComparison.OrdinalIgnoreCase));
+        if (floorItem != null)
+        {
+            if (!floorItem.CanBeTaken)
+                return new ActionResult { Success = false, Message = $"You cannot take {floorItem.Name}." };
+            if (!_gameState.PlayerInventory.AddItem(floorItem))
+                return new ActionResult { Success = false, Message = $"You cannot carry {floorItem.Name}; your inventory is too heavy." };
+
+            room.Items.Remove(floorItem);
+            return new ActionResult { Success = true, Message = $"You take {floorItem.Name}." };
+        }
+
         // Check if the target is actually an NPC name (LLM confusion)
         var targetNpc = room.NPCIds
             .FirstOrDefault(id => _gameState.NPCs.ContainsKey(id) &&
@@ -2399,10 +2852,15 @@ RULES:
 
                 foreach (var lootItem in items)
                 {
-                    _gameState.PlayerInventory.AddItem(lootItem.Item, lootItem.Quantity);
-                    npc.CarriedItems.Remove(lootItem.Item.Id);
-                    itemsTaken.Add(lootItem.Item.Name);
+                    if (_gameState.PlayerInventory.AddItem(lootItem.Item, lootItem.Quantity))
+                    {
+                        npc.CarriedItems.Remove(lootItem.Item.Id);
+                        itemsTaken.Add(lootItem.Item.Name);
+                    }
                 }
+
+                if (itemsTaken.Count == 0)
+                    return new ActionResult { Success = false, Message = "You cannot carry any more loot." };
 
                 return new ActionResult
                 {
@@ -2415,13 +2873,6 @@ RULES:
                 return new ActionResult { Success = false, Message = $"{npc.Name}'s body has no items to take." };
             }
         }
-
-        // Check if player already has this item
-        var playerItem = _gameState.PlayerInventory.Items.Values
-            .FirstOrDefault(ii => ii.Item.Name.ToLower().Contains(itemLower));
-
-        if (playerItem != null)
-            return new ActionResult { Success = false, Message = $"You already have {playerItem.Item.Name}." };
 
         // Check dead NPCs in the room for loot
         foreach (var npcId in room.NPCIds)
@@ -2441,7 +2892,8 @@ RULES:
                 if (lootItem != null)
                 {
                     // Transfer item from NPC to player inventory
-                    _gameState.PlayerInventory.AddItem(lootItem.Item, lootItem.Quantity);
+                    if (!_gameState.PlayerInventory.AddItem(lootItem.Item, lootItem.Quantity))
+                        return new ActionResult { Success = false, Message = $"You cannot carry {lootItem.Item.Name}; your inventory is too heavy." };
                     npc.CarriedItems.Remove(lootItem.Item.Id);
                     return new ActionResult { Success = true, Message = $"You take {lootItem.Item.Name} from {npc.Name}'s body." };
                 }
@@ -2463,7 +2915,16 @@ RULES:
         if (item == null)
             return new ActionResult { Success = false, Message = $"You don't have '{itemName}'." };
 
-        _gameState.PlayerInventory.RemoveItem(item.Item.Id);
+        if (_gameState.Player.EquipmentSlots.Values.Any(equippedItemId =>
+                equippedItemId?.Equals(item.Item.Id, StringComparison.OrdinalIgnoreCase) == true))
+        {
+            return new ActionResult { Success = false, Message = $"Unequip {item.Item.Name} before dropping it." };
+        }
+
+        if (!_gameState.PlayerInventory.RemoveItem(item.Item.Id))
+            return new ActionResult { Success = false, Message = $"You could not drop {item.Item.Name}." };
+
+        _gameState.GetCurrentRoom().Items.Add(item.Item.CloneRuntime());
         return new ActionResult { Success = true, Message = $"You dropped {item.Item.Name}." };
     }
 
@@ -2569,6 +3030,13 @@ RULES:
             if (item.ConsumableUsesRemaining == 0)
             {
                 _gameState.PlayerInventory.RemoveItem(item.Id);
+                if (_gameState.PlayerInventory.Items.TryGetValue(item.Id, out var remainingStack))
+                {
+                    var usesPerItem = _game?.Items.TryGetValue(item.Id, out var definition) == true
+                        ? definition.ConsumableUsesRemaining
+                        : 1;
+                    remainingStack.Item.ConsumableUsesRemaining = Math.Max(1, usesPerItem ?? 1);
+                }
             }
 
             return new ActionResult { Success = true, Message = message.ToString().TrimEnd() };
@@ -2829,10 +3297,19 @@ RULES:
             };
         }
 
+        var purchasedItem = item.CloneRuntime();
+        if (!_gameState.PlayerInventory.AddItem(purchasedItem, 1))
+        {
+            return new ActionResult
+            {
+                Success = false,
+                Message = $"You cannot carry {item.Name}; your inventory is too heavy."
+            };
+        }
+
         // Complete the transaction
         _gameState.Player.Wallet.Remove(price);
         merchant.Wallet.Add(price);
-        _gameState.PlayerInventory.AddItem(item, 1);
 
         // Remove from merchant (if quantity = 1, remove entirely)
         if (merchantItem.Quantity <= 1)
@@ -2896,6 +3373,12 @@ RULES:
         if (!item.CanBeSold)
             return new ActionResult { Success = false, Message = $"{item.Name} cannot be sold." };
 
+        if (_gameState.Player.EquipmentSlots.Values.Any(equippedItemId =>
+                string.Equals(equippedItemId, item.Id, StringComparison.OrdinalIgnoreCase)))
+        {
+            return new ActionResult { Success = false, Message = $"Unequip {item.Name} before selling it." };
+        }
+
         var sellPrice = item.GetSellPrice();
 
         // Check if merchant can afford it
@@ -2909,15 +3392,17 @@ RULES:
         }
 
         // Complete the transaction
+        if (!_gameState.PlayerInventory.RemoveItem(item.Id, 1))
+            return new ActionResult { Success = false, Message = $"You no longer have {item.Name} to sell." };
+
         merchant.Wallet.Remove(sellPrice);
         _gameState.Player.Wallet.Add(sellPrice);
-        _gameState.PlayerInventory.RemoveItem(item.Id, 1);
 
         // Add to merchant's inventory
         if (merchant.CarriedItems.ContainsKey(item.Id))
             merchant.CarriedItems[item.Id].Quantity++;
         else
-            merchant.CarriedItems[item.Id] = new InventoryItem { Item = item, Quantity = 1 };
+            merchant.CarriedItems[item.Id] = new InventoryItem { Item = item.CloneRuntime(), Quantity = 1 };
 
         var priceDisplay = Wallet.FormatAmount(sellPrice, _economy);
         return new ActionResult
@@ -3041,8 +3526,9 @@ RULES:
 
             if (hasMatchingTag && room.Resources.Resources.Count > 0)
             {
-                // Pick a random appropriate resource
-                var randomResource = room.Resources.Resources[_random.Next(room.Resources.Resources.Count)];
+                // Pick reproducibly from the authored resources for this turn.
+                var resourceSelector = CreateTurnRandom($"resource-selection:{room.Id}:{targetLower}");
+                var randomResource = room.Resources.Resources[resourceSelector.Next(room.Resources.Resources.Count)];
                 return TryGatherResource(randomResource, room);
             }
         }
@@ -3084,17 +3570,21 @@ RULES:
         }
 
         // Check if resource is depleted
-        if (room.Resources?.DepletedResources.ContainsKey(resource.ItemId) == true)
+        if (room.Resources?.DepletedResources.TryGetValue(resource.ItemId, out var turnsRemaining) == true)
         {
             return new ActionResult
             {
                 Success = false,
-                Message = $"This area has been searched recently. Try again later."
+                Message = turnsRemaining < 0
+                    ? $"The supply of {resource.DisplayName ?? resource.ItemId} here has been exhausted."
+                    : $"This area has been searched recently. Try again in {turnsRemaining} turn(s)."
             };
         }
 
-        // Roll for success
-        var roll = _random.Next(100);
+        // Rolls are derived from persisted world state, so saving/reloading before
+        // an action cannot change its outcome.
+        var random = CreateTurnRandom($"gather:{room.Id}:{resource.ItemId}");
+        var roll = random.Next(100);
         var successChance = resource.FindChance;
 
         // Apply skill bonus if applicable
@@ -3104,6 +3594,7 @@ RULES:
             successChance += skillLevel * 2;
         }
 
+        successChance = Math.Clamp(successChance, 0, 100);
         if (roll >= successChance)
         {
             return new ActionResult
@@ -3114,7 +3605,11 @@ RULES:
         }
 
         // Success! Determine quantity
-        var quantity = _random.Next(resource.MinQuantity, resource.MaxQuantity + 1);
+        var minimumQuantity = Math.Max(1, resource.MinQuantity);
+        var maximumQuantity = Math.Max(minimumQuantity, resource.MaxQuantity);
+        var quantity = minimumQuantity == maximumQuantity
+            ? minimumQuantity
+            : (int)random.NextInt64(minimumQuantity, (long)maximumQuantity + 1);
 
         // Get or create the item
         Item? item = null;
@@ -3130,16 +3625,36 @@ RULES:
             };
         }
 
-        // Add to inventory
-        _gameState.PlayerInventory.AddItem(item, quantity);
-
-        // Mark as depleted if not renewable
-        if (!resource.Renewable && room.Resources != null)
+        // Add an independent runtime instance to inventory.
+        if (!_gameState.PlayerInventory.AddItem(item.CloneRuntime(), quantity))
         {
-            room.Resources.DepletedResources[resource.ItemId] = resource.RespawnTurns ?? 10;
+            return new ActionResult
+            {
+                Success = false,
+                Message = $"You find {quantity}x {item.Name}, but cannot carry the extra weight."
+            };
         }
 
-        var verb = resource.GatherVerb == "gather" ? "found" : $"{resource.GatherVerb}ed";
+        // Positive values count down each world turn; -1 represents permanent
+        // depletion for a non-renewable resource.
+        if (room.Resources != null)
+        {
+            if (resource.Renewable)
+                room.Resources.DepletedResources[resource.ItemId] = Math.Max(1, resource.RespawnTurns ?? 10);
+            else
+                room.Resources.DepletedResources[resource.ItemId] = -1;
+        }
+
+        var verb = resource.GatherVerb.ToLowerInvariant() switch
+        {
+            "gather" => "found",
+            "mine" => "mined",
+            "forage" => "foraged",
+            "pick" => "picked",
+            "chop" => "chopped",
+            var customVerb when customVerb.EndsWith('e') => $"{customVerb}d",
+            var customVerb => $"{customVerb}ed"
+        };
         return new ActionResult
         {
             Success = true,
@@ -3181,7 +3696,7 @@ Respond in JSON format only:
                 new() { Role = "user", Content = prompt }
             };
 
-            var response = await _ollamaClient.ChatAsync(messages);
+            var response = await _llmClient.ChatAsync(messages);
             
             // Parse response
             var jsonMatch = System.Text.RegularExpressions.Regex.Match(response, @"\{[^}]+\}");
@@ -3214,7 +3729,14 @@ Respond in JSON format only:
                     Value = 5
                 };
 
-                _gameState.PlayerInventory.AddItem(item, quantity);
+                if (!_gameState.PlayerInventory.AddItem(item, quantity))
+                {
+                    return new ActionResult
+                    {
+                        Success = false,
+                        Message = $"You find {quantity}x {itemName}, but cannot carry the extra weight."
+                    };
+                }
 
                 return new ActionResult
                 {
@@ -3233,6 +3755,15 @@ Respond in JSON format only:
             Success = false,
             Message = $"You search but don't find any {target} in this location."
         };
+    }
+
+    private Random CreateTurnRandom(string scope)
+    {
+        var material = Encoding.UTF8.GetBytes(
+            $"{_gameState.WorldSeed}\u001F{_gameState.TurnNumber + 1}\u001F{_gameState.CurrentRoomId}\u001F{scope}");
+        var hash = System.Security.Cryptography.SHA256.HashData(material);
+        var seed = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(hash);
+        return new Random(seed);
     }
 
     // ========== CRAFTING SYSTEM ==========
@@ -3280,18 +3811,14 @@ Respond in JSON format only:
         // Find the recipe
         var itemLower = itemToCraft.ToLower();
         var recipe = _crafting.Recipes.Values.FirstOrDefault(r =>
-            r.Name.ToLower().Contains(itemLower) ||
-            r.OutputItemId.ToLower().Contains(itemLower));
+            r.Name.Contains(itemToCraft, StringComparison.OrdinalIgnoreCase) ||
+            r.OutputItemId.Replace('_', ' ').Contains(itemLower, StringComparison.OrdinalIgnoreCase) ||
+            (_game?.Items.TryGetValue(r.OutputItemId, out var authoredOutput) == true &&
+             authoredOutput.Name.Contains(itemToCraft, StringComparison.OrdinalIgnoreCase)));
 
         if (recipe == null)
         {
-            // Check if crafter knows any matching recipes
-            recipe = _crafting.Recipes.Values.FirstOrDefault(r =>
-                crafter.KnownRecipes.Contains(r.Id) ||
-                (crafter.CraftingSpecialty != null && r.CraftingSpecialty == crafter.CraftingSpecialty));
-
-            if (recipe == null)
-                return new ActionResult { Success = false, Message = $"{crafter.Name} doesn't know how to craft '{itemToCraft}'." };
+            return new ActionResult { Success = false, Message = $"{crafter.Name} doesn't know how to craft '{itemToCraft}'." };
         }
 
         // Check if this crafter can make this recipe
@@ -3330,6 +3857,27 @@ Respond in JSON format only:
             }
         }
 
+        var outputItem = _game?.Items.TryGetValue(recipe.OutputItemId, out var authoredItem) == true
+            ? authoredItem.CloneRuntime()
+            : new Item
+            {
+                Id = recipe.OutputItemId,
+                Name = recipe.Name,
+                Type = ItemType.Miscellaneous
+            };
+        var ingredientWeight = recipe.Ingredients.Sum(ingredient =>
+            (_gameState.PlayerInventory.GetItem(ingredient.ItemId)?.Item.Weight ?? 0) * ingredient.Quantity);
+        var resultingWeight = _gameState.PlayerInventory.CurrentWeight - ingredientWeight +
+                              outputItem.Weight * recipe.OutputQuantity;
+        if (resultingWeight > _gameState.PlayerInventory.MaxWeight)
+        {
+            return new ActionResult
+            {
+                Success = false,
+                Message = $"You would not be able to carry {recipe.OutputQuantity}x {outputItem.Name}."
+            };
+        }
+
         // Consume ingredients
         foreach (var ingredient in recipe.Ingredients)
         {
@@ -3343,22 +3891,7 @@ Respond in JSON format only:
             crafter.Wallet.Add(recipe.CraftingCost);
         }
 
-        // Create the output item
-        if (_game?.Items.TryGetValue(recipe.OutputItemId, out var outputItem) == true)
-        {
-            _gameState.PlayerInventory.AddItem(outputItem, recipe.OutputQuantity);
-        }
-        else
-        {
-            // Create basic item
-            var newItem = new Item
-            {
-                Id = recipe.OutputItemId,
-                Name = recipe.Name,
-                Type = ItemType.Miscellaneous
-            };
-            _gameState.PlayerInventory.AddItem(newItem, recipe.OutputQuantity);
-        }
+        _gameState.PlayerInventory.AddItem(outputItem, recipe.OutputQuantity);
 
         var message = new StringBuilder();
         message.Append($"{crafter.Name} crafts {recipe.OutputQuantity}x {recipe.Name} for you!");
@@ -3431,15 +3964,28 @@ Respond in JSON format only:
     /// </summary>
     private ActionResult HandleQuests()
     {
+        var offeredQuests = _gameState.ActiveQuests.Where(q => q.Status == QuestStatus.Offered).ToList();
         var activeQuests = _gameState.ActiveQuests.Where(q => q.Status == QuestStatus.Accepted || q.Status == QuestStatus.InProgress).ToList();
         var completedQuests = _gameState.ActiveQuests.Where(q => q.Status == QuestStatus.Completed || q.Status == QuestStatus.TurnedIn).ToList();
 
-        if (activeQuests.Count == 0 && completedQuests.Count == 0)
+        if (offeredQuests.Count == 0 && activeQuests.Count == 0 && completedQuests.Count == 0)
             return new ActionResult { Success = true, Message = "You have no quests. Talk to NPCs to find opportunities." };
 
         var message = new StringBuilder();
         message.AppendLine("📜 Quest Log:");
         message.AppendLine();
+
+        if (offeredQuests.Count > 0)
+        {
+            message.AppendLine("=== Available Quests ===");
+            foreach (var quest in offeredQuests)
+            {
+                message.AppendLine($"○ {quest.Title} [{quest.Id}]");
+                message.AppendLine($"   {quest.Description}");
+                message.AppendLine($"   Use 'accept {quest.Id}' to begin.");
+                message.AppendLine();
+            }
+        }
 
         if (activeQuests.Count > 0)
         {
@@ -3493,6 +4039,189 @@ Respond in JSON format only:
         }
 
         return new ActionResult { Success = true, Message = message.ToString() };
+    }
+
+    private ActionResult HandleAcceptQuest(string questName)
+    {
+        var quest = ResolveQuest(questName);
+        if (quest == null)
+            return new ActionResult { Success = false, Message = $"No quest matches '{questName}'." };
+
+        if (quest.Status != QuestStatus.Offered)
+            return new ActionResult { Success = false, Message = $"{quest.Title} is already {quest.Status.ToString().ToLowerInvariant()}." };
+
+        if (!string.IsNullOrWhiteSpace(quest.GiverNpcId) &&
+            !_gameState.GetCurrentRoom().NPCIds.Contains(quest.GiverNpcId, StringComparer.OrdinalIgnoreCase))
+        {
+            var giverName = _gameState.NPCs.TryGetValue(quest.GiverNpcId, out var giver)
+                ? giver.Name
+                : quest.GiverNpcId;
+            return new ActionResult { Success = false, Message = $"Speak with {giverName} to accept {quest.Title}." };
+        }
+
+        return new ActionResult
+        {
+            Success = true,
+            Message = $"You accept the quest: {quest.Title}.",
+            Events = new()
+            {
+                WorldEvent.Create(
+                    WorldEventType.QuestAccepted,
+                    quest.Id,
+                    actorId: _gameState.Player.Id,
+                    roomId: _gameState.CurrentRoomId)
+            }
+        };
+    }
+
+    private ActionResult HandleTurnInQuest(string questName)
+    {
+        var quest = ResolveQuest(questName);
+        if (quest == null)
+            return new ActionResult { Success = false, Message = $"No quest matches '{questName}'." };
+        if (quest.Status != QuestStatus.Completed)
+            return new ActionResult { Success = false, Message = $"{quest.Title} is not ready to turn in." };
+
+        if (!string.IsNullOrWhiteSpace(quest.GiverNpcId) &&
+            !_gameState.GetCurrentRoom().NPCIds.Contains(quest.GiverNpcId, StringComparer.OrdinalIgnoreCase))
+        {
+            var giverName = _gameState.NPCs.TryGetValue(quest.GiverNpcId, out var giver)
+                ? giver.Name
+                : quest.GiverNpcId;
+            return new ActionResult { Success = false, Message = $"Return to {giverName} to turn in {quest.Title}." };
+        }
+
+        return new ActionResult
+        {
+            Success = true,
+            Message = $"You turn in the quest: {quest.Title}.",
+            Events = new()
+            {
+                WorldEvent.Create(
+                    WorldEventType.QuestTurnedIn,
+                    quest.Id,
+                    actorId: _gameState.Player.Id,
+                    roomId: _gameState.CurrentRoomId)
+            }
+        };
+    }
+
+    private ActionResult HandleProjects()
+    {
+        if (_gameState.WorldProjects.Count == 0)
+            return new ActionResult { Success = true, Message = "There are no world projects underway." };
+
+        var message = new StringBuilder("🏗️ World Projects:\n\n");
+        foreach (var project in _gameState.WorldProjects)
+        {
+            var icon = project.Status switch
+            {
+                WorldProjectStatus.Completed => "✓",
+                WorldProjectStatus.Active => "⚒️",
+                WorldProjectStatus.Locked => "🔒",
+                _ => "○"
+            };
+            message.AppendLine($"{icon} {project.Name} [{project.Id}] — {project.Status}");
+            message.AppendLine($"   {project.Description}");
+
+            var stage = project.CurrentStage;
+            if (stage != null && project.Status != WorldProjectStatus.Locked)
+            {
+                message.AppendLine($"   Current stage: {stage.Name}");
+                message.AppendLine($"   {stage.Description}");
+                foreach (var requirement in stage.Requirements)
+                {
+                    var requirementIcon = requirement.IsMet ? "✓" : "○";
+                    var label = requirement.Description ?? requirement.TargetId ?? requirement.Type.ToString();
+                    message.AppendLine($"   {requirementIcon} {label} ({requirement.CurrentAmount}/{requirement.RequiredAmount})");
+                }
+            }
+
+            message.AppendLine();
+        }
+
+        message.Append("Contribute materials with: contribute [quantity] [item] to [project]");
+        return new ActionResult { Success = true, Message = message.ToString() };
+    }
+
+    private ActionResult HandleProjectContribution(string projectName, string contributionDetails)
+    {
+        var project = ResolveProject(projectName);
+        if (project == null)
+            return new ActionResult { Success = false, Message = $"No world project matches '{projectName}'." };
+
+        var stage = project.CurrentStage;
+        if (stage == null)
+            return new ActionResult { Success = false, Message = $"{project.Name} is already complete." };
+
+        var amountMatch = Regex.Match(contributionDetails ?? string.Empty, @"\b(\d+)\b");
+        var requestedAmount = amountMatch.Success && long.TryParse(amountMatch.Value, out var parsedAmount)
+            ? parsedAmount
+            : 0;
+        var normalizedDetails = Regex.Replace(contributionDetails ?? string.Empty, @"\b\d+\b", " ")
+            .Replace('_', ' ')
+            .Trim();
+
+        var currencyRequirement = stage.Requirements.FirstOrDefault(requirement =>
+            !requirement.IsMet && requirement.Type == WorldProjectRequirementType.Currency);
+        var isCurrency = currencyRequirement != null &&
+            (normalizedDetails.Contains("currency", StringComparison.OrdinalIgnoreCase) ||
+             normalizedDetails.Contains("coin", StringComparison.OrdinalIgnoreCase) ||
+             normalizedDetails.Contains("gold", StringComparison.OrdinalIgnoreCase) ||
+             normalizedDetails.Contains("silver", StringComparison.OrdinalIgnoreCase));
+
+        WorldProjectProgressionResult result;
+        if (isCurrency)
+        {
+            var amount = requestedAmount > 0 ? requestedAmount : _gameState.Player.Wallet.TotalBaseUnits;
+            result = _worldProjectService.Contribute(
+                _gameState,
+                project.Id,
+                WorldProjectRequirementType.Currency,
+                null,
+                amount,
+                effectiveTurn: _gameState.TurnNumber + 1);
+        }
+        else
+        {
+            var itemRequirement = stage.Requirements.FirstOrDefault(requirement =>
+                !requirement.IsMet &&
+                requirement.Type == WorldProjectRequirementType.Item &&
+                (string.IsNullOrWhiteSpace(normalizedDetails) ||
+                 (requirement.TargetId?.Replace('_', ' ').Contains(normalizedDetails, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                 normalizedDetails.Contains(requirement.TargetId?.Replace('_', ' ') ?? string.Empty, StringComparison.OrdinalIgnoreCase)))
+                ?? stage.Requirements.FirstOrDefault(requirement =>
+                    !requirement.IsMet && requirement.Type == WorldProjectRequirementType.Item);
+
+            if (itemRequirement?.TargetId == null)
+                return new ActionResult { Success = false, Message = "That project stage does not need an item contribution." };
+
+            var inventoryItem = _gameState.PlayerInventory.Items.FirstOrDefault(pair =>
+                pair.Key.Equals(itemRequirement.TargetId, StringComparison.OrdinalIgnoreCase));
+            if (string.IsNullOrEmpty(inventoryItem.Key) && !string.IsNullOrWhiteSpace(normalizedDetails))
+            {
+                inventoryItem = _gameState.PlayerInventory.Items.FirstOrDefault(pair =>
+                    pair.Value.Item.Name.Contains(normalizedDetails, StringComparison.OrdinalIgnoreCase));
+            }
+            var amount = requestedAmount > 0
+                ? requestedAmount
+                : inventoryItem.Value?.Quantity ?? 0;
+            result = _worldProjectService.Contribute(
+                _gameState,
+                project.Id,
+                WorldProjectRequirementType.Item,
+                itemRequirement.TargetId,
+                amount,
+                effectiveTurn: _gameState.TurnNumber + 1);
+        }
+
+        var success = result.Events.Any(worldEvent => worldEvent.Type == WorldEventType.ProjectContributed);
+        return new ActionResult
+        {
+            Success = success,
+            Message = string.Join("\n", result.Messages),
+            Events = result.Events
+        };
     }
 
     /// <summary>
@@ -3852,7 +4581,7 @@ Return ONLY the converted message - no other text, no markdown, just the message
 
         try
         {
-            var response = await _ollamaClient.ChatAsync(messages);
+            var response = await _llmClient.ChatAsync(messages);
             var convertedMessage = response.Trim();
 
             // Ensure it's not empty
@@ -3888,16 +4617,19 @@ Return ONLY the converted message - no other text, no markdown, just the message
         _gameState.AddRecentCommand(playerIntentDescription);
 
         // Execute each plan and collect results
+        var beforeAction = CaptureActionSnapshot();
         var executionResults = new List<(string action, ActionResult result)>();
         foreach (var plan in plans)
         {
+            var inventoryBeforeAction = CaptureInventoryQuantities();
             var result = await ApplyActionAsync(plan, playerIntentDescription);
+            AddInventoryGainEvents(plan, result, inventoryBeforeAction);
             executionResults.Add((plan.Action, result));
             response.ActionResults.Add((plan.Action, result.Success, result.Message));
         }
 
         // For informational commands, return result directly without narration
-        var informationalCommands = new[] { "status", "inventory", "look", "equipped", "quests", "recipes", "shop", "help", "display" };
+        var informationalCommands = new[] { "status", "inventory", "look", "equipped", "quests", "projects", "recipes", "shop", "help", "display" };
         if (plans.Count == 1 && informationalCommands.Contains(plans[0].Action.ToLower()))
         {
             var result = executionResults[0].result;
@@ -3905,8 +4637,14 @@ Return ONLY the converted message - no other text, no markdown, just the message
         }
         else
         {
+            var worldUpdate = AdvanceWorld(
+                playerIntentDescription,
+                plans,
+                executionResults,
+                beforeAction);
             // Narrate the results
             var narration = await NarrateWithResultsAsync(playerIntentDescription, plans, executionResults);
+            narration = AppendWorldUpdates(narration, worldUpdate.Messages);
             response.Response = BuildGameResponse(narration);
         }
 
@@ -3990,6 +4728,7 @@ public class ActionResult
 {
     public bool Success { get; set; }
     public string Message { get; set; } = string.Empty;
+    public List<WorldEvent> Events { get; set; } = new();
 }
 
 /// <summary>

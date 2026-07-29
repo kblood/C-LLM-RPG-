@@ -37,6 +37,18 @@ public class Exit
     /// </summary>
     public string? UnavailableReason { get; set; }
 
+    /// <summary>
+    /// Optional item that must be carried before this exit can be used.
+    /// The item is checked by ID and is not consumed.
+    /// </summary>
+    public string? RequiredItemId { get; set; }
+
+    /// <summary>
+    /// Optional key that unlocks this exit. The key is checked by item ID or
+    /// by an item's <see cref="Item.UnlocksId"/> value and is not consumed.
+    /// </summary>
+    public string? RequiredKeyId { get; set; }
+
     public Exit() { }
 
     public Exit(string displayName, string destinationRoomId, string? description = null)

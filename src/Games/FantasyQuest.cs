@@ -56,6 +56,23 @@ public static class FantasyQuest
             .WithMetadata("lighting", "day")
             .Build();
 
+        var forgeworksExit = new Exit("West to the Old Forgeworks", "forge_district",
+            "A soot-dark lane leads toward Ravensholm's abandoned foundry")
+        {
+            Id = "forgeworks_gate",
+            IsAvailable = false,
+            UnavailableReason = "The old foundry is closed; Ravensholm first needs a safe mine and fresh ore."
+        };
+        townSquare.Exits["west_to_old_forgeworks"] = forgeworksExit;
+
+        var forgeDistrict = new RoomBuilder("forge_district")
+            .WithName("Ravensholm Forgeworks")
+            .WithDescription("The old foundry stands cold and shuttered. Empty workshops line a yard choked with weeds.")
+            .AddExit("Back to Town Square", "town_square")
+            .WithMetadata("danger_level", 0)
+            .WithMetadata("district_state", "abandoned")
+            .Build();
+
         var tavern = new RoomBuilder("tavern")
             .WithName("The Wandering Wyvern Tavern")
             .WithDescription("A cozy tavern filled with the smells of mead and hearty stew. A roaring fireplace warms the room. " +
@@ -87,6 +104,18 @@ public static class FantasyQuest
             .AddNPCs("ranger")
             .WithBiome(Biomes.Forest)
             .WithResourceTags("herbs", "wood", "mushrooms")
+            .AddGatherableResource(new GatherableResource
+            {
+                ItemId = "moonpetal",
+                DisplayName = "Moonpetal Flower",
+                FindChance = 65,
+                MinQuantity = 1,
+                MaxQuantity = 2,
+                Renewable = true,
+                RespawnTurns = 4,
+                GatherVerb = "pick",
+                RelatedSkill = "herbalism"
+            })
             .WithMetadata("danger_level", 1)
             .WithMetadata("lighting", "dim")
             .Build();
@@ -99,6 +128,30 @@ public static class FantasyQuest
             .AddExit("Continue Deeper", "goblin_cave")
             .WithBiome(Biomes.Forest)
             .WithResourceTags("herbs", "mushrooms", "alchemical")
+            .AddGatherableResource(new GatherableResource
+            {
+                ItemId = "moonpetal",
+                DisplayName = "Moonpetal Flower",
+                FindChance = 80,
+                MinQuantity = 1,
+                MaxQuantity = 2,
+                Renewable = true,
+                RespawnTurns = 3,
+                GatherVerb = "pick",
+                RelatedSkill = "herbalism"
+            })
+            .AddGatherableResource(new GatherableResource
+            {
+                ItemId = "shadow_mushroom",
+                DisplayName = "Shadow Mushroom",
+                FindChance = 55,
+                MinQuantity = 1,
+                MaxQuantity = 1,
+                Renewable = true,
+                RespawnTurns = 5,
+                GatherVerb = "forage",
+                RelatedSkill = "herbalism"
+            })
             .WithMetadata("danger_level", 2)
             .WithMetadata("lighting", "pitch_black")
             .Build();
@@ -111,6 +164,27 @@ public static class FantasyQuest
             .AddNPCs("goblin_king")
             .WithBiome(Biomes.Cave)
             .WithResourceTags("ore", "gems", "minerals")
+            .AddGatherableResource(new GatherableResource
+            {
+                ItemId = "iron_ore",
+                DisplayName = "Iron Ore",
+                FindChance = 80,
+                MinQuantity = 1,
+                MaxQuantity = 2,
+                Renewable = true,
+                RespawnTurns = 4,
+                GatherVerb = "mine",
+                RelatedSkill = "mining"
+            })
+            .AddGatherableResource(new GatherableResource
+            {
+                ItemId = "ruby_gem",
+                DisplayName = "Ruby Gem",
+                FindChance = 15,
+                Renewable = false,
+                GatherVerb = "mine",
+                RelatedSkill = "mining"
+            })
             .WithMetadata("danger_level", 3)
             .WithMetadata("hostile_creatures", new[] { "goblin" })
             .Build();
@@ -124,6 +198,18 @@ public static class FantasyQuest
             .AddNPCs("hermit")
             .WithBiome(Biomes.Mountain)
             .WithResourceTags("ore", "gems", "stone")
+            .AddGatherableResource(new GatherableResource
+            {
+                ItemId = "iron_ore",
+                DisplayName = "Iron Ore",
+                FindChance = 60,
+                MinQuantity = 1,
+                MaxQuantity = 2,
+                Renewable = true,
+                RespawnTurns = 5,
+                GatherVerb = "mine",
+                RelatedSkill = "mining"
+            })
             .WithMetadata("danger_level", 2)
             .WithMetadata("lighting", "dim")
             .WithMetadata("temperature", "freezing")
@@ -157,6 +243,7 @@ public static class FantasyQuest
             .AddRoom(townSquare)
             .AddRoom(tavern)
             .AddRoom(marketplace)
+            .AddRoom(forgeDistrict)
             .AddRoom(forestEntrance)
             .AddRoom(darkForest)
             .AddRoom(goblinCave)
@@ -522,9 +609,33 @@ public static class FantasyQuest
             Title = "Defeat the Dragon",
             Description = "Travel to Mount Infernus and defeat the dragon Infernus to recover the Crown of Amalion",
             GiverNpcId = "town_crier",
+            Status = QuestStatus.Accepted,
+            Type = QuestType.Story,
             RewardExperience = 500,
             RewardGold = 200,
-            Objectives = new() { "Reach the Dragon's Lair", "Defeat Infernus the Dragon", "Return the Crown" }
+            Objectives = new() { "Reach the Dragon's Lair", "Defeat Infernus the Dragon", "Recover the Crown" },
+            Requirements = new()
+            {
+                new QuestRequirement
+                {
+                    Type = "location",
+                    TargetId = "dragon_lair",
+                    TargetName = "the Dragon's Lair"
+                },
+                new QuestRequirement
+                {
+                    Type = "kill",
+                    TargetId = "dragon",
+                    TargetName = "Infernus the Dragon"
+                },
+                new QuestRequirement
+                {
+                    Type = "item",
+                    TargetId = "crown_of_amalion",
+                    TargetName = "the Crown of Amalion",
+                    ConsumedOnCompletion = false
+                }
+            }
         };
 
         gameBuilder.AddQuest(mainQuest);
@@ -542,8 +653,131 @@ public static class FantasyQuest
                            "Songs will be sung of your bravery for generations to come!"
         });
 
-        return gameBuilder
+        var game = gameBuilder
             .WithStartingRoom("town_square")
             .Build();
+
+        game.StartingItems = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["iron_sword"] = 1,
+            ["leather_armor"] = 1,
+            ["health_potion"] = 2
+        };
+
+        game.WorldProjects.Add(CreateRavensholmForgeProject());
+        return game;
+    }
+
+    private static WorldProject CreateRavensholmForgeProject()
+    {
+        return new WorldProject
+        {
+            Id = "ravensholm_forgeworks",
+            Name = "Reclaim Ravensholm's Forgeworks",
+            Description = "Drive the goblins from their ore cave, then supply enough iron to restart Ravensholm's foundry.",
+            Status = WorldProjectStatus.Available,
+            Stages = new()
+            {
+                new WorldProjectStage
+                {
+                    Id = "secure_mine",
+                    Name = "Secure the Goblin Mine",
+                    Description = "Defeat King Gruk so Ravensholm's miners can safely return.",
+                    Requirements = new()
+                    {
+                        new WorldProjectRequirement
+                        {
+                            Type = WorldProjectRequirementType.Event,
+                            EventType = WorldEventType.NpcDefeated,
+                            TargetId = "goblin_king",
+                            RequiredAmount = 1,
+                            Description = "Defeat King Gruk"
+                        }
+                    },
+                    Effects = new()
+                    {
+                        new WorldProjectEffect
+                        {
+                            Type = WorldProjectEffectType.SetRoomDescription,
+                            TargetId = "goblin_cave",
+                            Value = "Fresh air moves through the reclaimed cave. Ravensholm miners shore up the tunnels while rich iron veins glint in the torchlight."
+                        },
+                        new WorldProjectEffect
+                        {
+                            Type = WorldProjectEffectType.SetRoomMetadata,
+                            TargetId = "goblin_cave",
+                            SecondaryTargetId = "danger_level",
+                            Value = "1"
+                        },
+                        new WorldProjectEffect
+                        {
+                            Type = WorldProjectEffectType.AddRoomResource,
+                            TargetId = "goblin_cave",
+                            SecondaryTargetId = "iron_ore",
+                            Quantity = 2,
+                            Data = new(StringComparer.OrdinalIgnoreCase)
+                            {
+                                ["displayName"] = "Iron Ore",
+                                ["findChance"] = "85",
+                                ["renewable"] = "true",
+                                ["respawnTurns"] = "3",
+                                ["gatherVerb"] = "mine",
+                                ["relatedSkill"] = "mining"
+                            }
+                        }
+                    }
+                },
+                new WorldProjectStage
+                {
+                    Id = "supply_forge",
+                    Name = "Supply the Forge",
+                    Description = "Contribute 3 Iron Ore to rebuild the furnaces.",
+                    Requirements = new()
+                    {
+                        new WorldProjectRequirement
+                        {
+                            Type = WorldProjectRequirementType.Item,
+                            TargetId = "iron_ore",
+                            RequiredAmount = 3,
+                            Description = "Contribute Iron Ore"
+                        }
+                    },
+                    Effects = new()
+                    {
+                        new WorldProjectEffect
+                        {
+                            Type = WorldProjectEffectType.EnableExit,
+                            TargetId = "town_square",
+                            SecondaryTargetId = "forgeworks_gate"
+                        },
+                        new WorldProjectEffect
+                        {
+                            Type = WorldProjectEffectType.SetRoomDescription,
+                            TargetId = "forge_district",
+                            Value = "Ravensholm's forgeworks thunder with new life. Furnaces roar, apprentices hurry between workshops, and newly forged tools are already changing the town."
+                        },
+                        new WorldProjectEffect
+                        {
+                            Type = WorldProjectEffectType.SetRoomMetadata,
+                            TargetId = "forge_district",
+                            SecondaryTargetId = "district_state",
+                            Value = "thriving"
+                        },
+                        new WorldProjectEffect
+                        {
+                            Type = WorldProjectEffectType.AppendRoomDescription,
+                            TargetId = "town_square",
+                            Value = "To the west, smoke rises from the reopened forgeworks and the ring of hammers carries across the square."
+                        },
+                        new WorldProjectEffect
+                        {
+                            Type = WorldProjectEffectType.MoveNpc,
+                            TargetId = "blacksmith",
+                            Value = "forge_district"
+                        }
+                    }
+                }
+            }
+        };
     }
 }

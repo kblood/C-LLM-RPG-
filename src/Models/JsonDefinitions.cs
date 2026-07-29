@@ -40,6 +40,9 @@ public class GameDefinition
     [JsonPropertyName("startingItems")]
     public List<StartingItemDefinition> StartingItems { get; set; } = new();
 
+    [JsonPropertyName("worldProjects")]
+    public List<WorldProject> WorldProjects { get; set; } = new();
+
     [JsonPropertyName("metadata")]
     public MetadataDefinition? Metadata { get; set; }
 }

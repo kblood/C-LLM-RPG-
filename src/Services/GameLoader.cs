@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using CSharpRPGBackend.Core;
 
 namespace CSharpRPGBackend.Services;
@@ -19,6 +20,7 @@ public class GameLoader
             AllowTrailingCommas = true,
             ReadCommentHandling = JsonCommentHandling.Skip
         };
+        _jsonOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
     }
 
     /// <summary>
@@ -67,6 +69,7 @@ public class GameLoader
             InitialPlayerLevel = gameDef.GameSettings?.PlayerStartingLevel ?? 1,
             StartingRoomId = gameDef.GameSettings?.StartingRoomId ?? "start",
             WinConditionRoomIds = gameDef.GameSettings?.WinConditionRoomIds,
+            WorldProjects = gameDef.WorldProjects ?? new List<WorldProject>(),
         };
 
         // Apply style settings
@@ -162,11 +165,17 @@ public class GameLoader
             }
         }
 
-        // Add starting items to player inventory
-        if (gameDef.StartingItems != null)
+        // Preserve the authored loadout on the reusable game definition. Runtime
+        // item instances are created later by GameStateFactory.
+        if (gameDef.StartingItems is { Count: > 0 })
         {
-            // We'll need to handle this in GameMaster when initializing the game state
-            game.CustomSettings["startingItems"] = JsonSerializer.Serialize(gameDef.StartingItems);
+            game.StartingItems = gameDef.StartingItems
+                .Where(item => !string.IsNullOrWhiteSpace(item.ItemId) && item.Quantity > 0)
+                .GroupBy(item => item.ItemId, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(
+                    group => group.Key,
+                    group => group.Sum(item => item.Quantity),
+                    StringComparer.OrdinalIgnoreCase);
         }
 
         return game;
@@ -242,6 +251,10 @@ public class GameLoader
             Rarity = rarity,
             IsEquippable = def.Equipment?.IsEquippable ?? false,
             EquipmentSlot = def.Equipment?.EquipmentSlot,
+            IsKey = itemType == ItemType.Key,
+            UnlocksId = def.Metadata.TryGetValue("unlocksId", out var unlocksId)
+                ? unlocksId?.ToString()
+                : null,
             Theme = def.Metadata.ContainsKey("theme") ? def.Metadata["theme"].ToString() : null,
             CanBeTaken = true,
             Stackable = itemType == ItemType.Consumable,
@@ -272,6 +285,12 @@ public class GameLoader
         {
             item.IsTeleportation = true;
             item.TeleportDestinationRoomId = def.Metadata["teleportTo"].ToString();
+        }
+
+        if (item.IsKey && def.Metadata.TryGetValue("keyType", out var keyTypeValue) &&
+            Enum.TryParse<KeyType>(keyTypeValue?.ToString(), true, out var keyType))
+        {
+            item.KeyType = keyType;
         }
 
         return item;
@@ -364,14 +383,19 @@ public class GameLoader
         {
             foreach (var exitDef in def.Exits)
             {
+                var requiresUnlock = exitDef.Locked ||
+                                     !string.IsNullOrWhiteSpace(exitDef.RequiresItem) ||
+                                     !string.IsNullOrWhiteSpace(exitDef.RequiresKey);
                 var exit = new Exit
                 {
                     Id = exitDef.Id,
                     DisplayName = exitDef.DisplayName,
                     DestinationRoomId = exitDef.DestinationRoomId,
                     Description = exitDef.Description,
-                    IsAvailable = !exitDef.Locked,
-                    UnavailableReason = exitDef.Locked ? "The exit is locked" : null
+                    IsAvailable = !requiresUnlock,
+                    UnavailableReason = requiresUnlock ? "The exit is locked" : null,
+                    RequiredItemId = exitDef.RequiresItem,
+                    RequiredKeyId = exitDef.RequiresKey
                 };
                 room.Exits[exitDef.DisplayName] = exit;
             }
@@ -403,7 +427,8 @@ public class GameLoader
             {
                 if (allItems.TryGetValue(roomItem.ItemId, out var item))
                 {
-                    room.Items.Add(item);
+                    for (var quantity = 0; quantity < Math.Max(1, roomItem.Quantity); quantity++)
+                        room.Items.Add(item.CloneRuntime());
                 }
             }
         }
@@ -433,6 +458,18 @@ public class GameLoader
 
     private Quest ConvertQuestDefinitionToQuest(QuestDefinition def)
     {
+        var questType = def.Type.Trim().ToLowerInvariant() switch
+        {
+            "story" or "main" => QuestType.Story,
+            "job" => QuestType.Job,
+            "craft" or "crafting" or "crafting_order" => QuestType.CraftingOrder,
+            "kill" or "bounty" => QuestType.Bounty,
+            "escort" or "companion" => QuestType.Escort,
+            "exploration" or "location" => QuestType.Exploration,
+            "delivery" => QuestType.Delivery,
+            _ => QuestType.SideQuest
+        };
+
         var quest = new Quest
         {
             Id = def.Id,
@@ -440,16 +477,66 @@ public class GameLoader
             Description = def.Description,
             GiverNpcId = def.Giver ?? string.Empty,
             RewardExperience = def.ExperienceReward,
-            Status = QuestStatus.Offered
+            Status = QuestStatus.Offered,
+            Type = questType,
+            IsRepeatable = def.Repeatable,
+            OfferDialogue = def.GiverDialog
         };
+
+        quest.Rewards.Items = def.ItemRewards
+            .Where(reward => !string.IsNullOrWhiteSpace(reward.ItemId) && reward.Quantity > 0)
+            .Select(reward => (reward.ItemId, reward.Quantity))
+            .ToList();
 
         // Add objectives
         foreach (var obj in def.Objectives)
         {
             quest.Objectives.Add(obj.Title);
+
+            if (obj.Completed)
+                quest.CompletedObjectives.Add(obj.Title);
+
+            if (obj.Optional)
+                continue;
+
+            var requirement = ConvertQuestObjective(obj);
+            if (requirement != null)
+                quest.Requirements.Add(requirement);
         }
 
         return quest;
+    }
+
+    private static QuestRequirement? ConvertQuestObjective(QuestObjectiveDefinition objective)
+    {
+        var objectiveType = objective.Type.Trim().ToLowerInvariant();
+        var requirementType = objectiveType switch
+        {
+            "reach_room" or "visit" or "explore" or "location" => "location",
+            "dialogue" or "talk" or "speak" => "talk",
+            "defeat" or "kill" => "kill",
+            "gather" or "collect" => "gather",
+            "craft" => "craft",
+            "item" or "obtain" => "item",
+            _ => objectiveType
+        };
+
+        var targetId = requirementType == "location"
+            ? objective.TargetRoomId
+            : objective.TargetNpcId;
+
+        if (string.IsNullOrWhiteSpace(targetId))
+            return null;
+
+        return new QuestRequirement
+        {
+            Type = requirementType,
+            TargetId = targetId,
+            TargetName = objective.Title,
+            Description = objective.Description,
+            Quantity = 1,
+            CurrentProgress = objective.Completed ? 1 : 0
+        };
     }
 }
 

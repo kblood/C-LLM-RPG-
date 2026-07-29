@@ -71,7 +71,7 @@ public class Quest
     public bool AreRequirementsMet(QuestProgress progress)
     {
         if (Requirements.Count == 0)
-            return CompletedObjectives.Count == Objectives.Count;
+            return Objectives.Count > 0 && CompletedObjectives.Count >= Objectives.Count;
 
         foreach (var req in Requirements)
         {
@@ -81,8 +81,9 @@ public class Quest
         return true;
     }
 
-    public bool IsComplete => CompletedObjectives.Count == Objectives.Count ||
-                              (Requirements.Count > 0 && Requirements.All(r => r.IsMet));
+    public bool IsComplete => Requirements.Count > 0
+        ? Requirements.All(requirement => requirement.IsMet)
+        : Objectives.Count > 0 && CompletedObjectives.Count >= Objectives.Count;
 }
 
 /// <summary>

@@ -11,7 +11,7 @@ public class LlmSettings
     // ── Persisted fields ──────────────────────────────────────────────────────
 
     [JsonPropertyName("backend")]
-    public string Backend { get; set; } = "ollama";          // "ollama" | "llamacpp"
+    public string Backend { get; set; } = "ollama"; // Ollama remains the default backend.
 
     [JsonPropertyName("model")]
     public string Model { get; set; } = "granite4:3b";
@@ -22,9 +22,38 @@ public class LlmSettings
     [JsonPropertyName("llamaCppUrl")]
     public string LlamaCppUrl { get; set; } = "http://localhost:8080";
 
+    [JsonPropertyName("geminiUrl")]
+    public string GeminiUrl { get; set; } = GeminiClient.DefaultBaseUrl;
+
+    [JsonPropertyName("geminiModel")]
+    public string GeminiModel { get; set; } = GeminiClient.DefaultModelName;
+
+    [JsonPropertyName("openRouterUrl")]
+    public string OpenRouterUrl { get; set; } = OpenRouterClient.DefaultBaseUrl;
+
+    [JsonPropertyName("openRouterModel")]
+    public string OpenRouterModel { get; set; } = OpenRouterClient.DefaultModelName;
+
+    /// <summary>Optional OpenRouter attribution URL sent as HTTP-Referer.</summary>
+    [JsonPropertyName("openRouterAppUrl")]
+    public string? OpenRouterAppUrl { get; set; }
+
+    /// <summary>Optional OpenRouter attribution title.</summary>
+    [JsonPropertyName("openRouterAppName")]
+    public string? OpenRouterAppName { get; set; } = "CSharpRPGBackend";
+
     /// <summary>Context window size passed to both Ollama (num_ctx) and llama-server (--ctx-size).</summary>
     [JsonPropertyName("contextSize")]
     public int ContextSize { get; set; } = 8192;
+
+    // Runtime-only credential fallbacks. Clients prefer their environment
+    // variables, and these properties are explicitly excluded from both save
+    // and load so llm-settings.json can never become a credential store.
+    [JsonIgnore]
+    public string? GeminiApiKey { get; set; }
+
+    [JsonIgnore]
+    public string? OpenRouterApiKey { get; set; }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -69,23 +98,73 @@ public class LlmSettings
     }
 
     /// <summary>Build the right ILlmClient from the current settings.</summary>
-    public ILlmClient CreateClient() => Backend.ToLowerInvariant() switch
+    public ILlmClient CreateClient() => NormalizedBackend switch
     {
         "llamacpp" or "llama.cpp" or "llama_cpp"
             => new LlamaCppClient(LlamaCppUrl, Model),
-        _   => new OllamaClient(OllamaUrl, Model, ContextSize)
+        "gemini" or "google" or "google-gemini"
+            => new GeminiClient(GeminiUrl, GeminiModel, GeminiApiKey),
+        "openrouter" or "open-router" or "open_router"
+            => new OpenRouterClient(
+                OpenRouterUrl,
+                OpenRouterModel,
+                OpenRouterApiKey,
+                OpenRouterAppUrl,
+                OpenRouterAppName),
+        _ => new OllamaClient(OllamaUrl, Model, ContextSize)
     };
 
-    public bool IsLlamaCpp => Backend.Equals("llamacpp", StringComparison.OrdinalIgnoreCase)
-                           || Backend.Equals("llama.cpp",  StringComparison.OrdinalIgnoreCase)
-                           || Backend.Equals("llama_cpp",  StringComparison.OrdinalIgnoreCase);
+    /// <summary>
+    /// Creates an independent in-memory copy, including runtime-only credentials.
+    /// This is useful for per-session overrides that must not mutate or persist the
+    /// server's shared configuration.
+    /// </summary>
+    public LlmSettings CreateRuntimeCopy() => new()
+    {
+        Backend = Backend,
+        Model = Model,
+        OllamaUrl = OllamaUrl,
+        LlamaCppUrl = LlamaCppUrl,
+        GeminiUrl = GeminiUrl,
+        GeminiModel = GeminiModel,
+        OpenRouterUrl = OpenRouterUrl,
+        OpenRouterModel = OpenRouterModel,
+        OpenRouterAppUrl = OpenRouterAppUrl,
+        OpenRouterAppName = OpenRouterAppName,
+        ContextSize = ContextSize,
+        GeminiApiKey = GeminiApiKey,
+        OpenRouterApiKey = OpenRouterApiKey
+    };
+
+    public bool IsLlamaCpp => NormalizedBackend is "llamacpp" or "llama.cpp" or "llama_cpp";
+    public bool IsGemini => NormalizedBackend is "gemini" or "google" or "google-gemini";
+    public bool IsOpenRouter => NormalizedBackend is "openrouter" or "open-router" or "open_router";
+    public bool IsOllama => !IsLlamaCpp && !IsGemini && !IsOpenRouter;
+
+    /// <summary>The endpoint used by the selected backend.</summary>
+    [JsonIgnore]
+    public string ActiveUrl => IsLlamaCpp
+        ? LlamaCppUrl
+        : IsGemini
+            ? GeminiUrl
+            : IsOpenRouter
+                ? OpenRouterUrl
+                : OllamaUrl;
+
+    /// <summary>The model used by the selected backend.</summary>
+    [JsonIgnore]
+    public string ActiveModel => IsGemini
+        ? GeminiModel
+        : IsOpenRouter
+            ? OpenRouterModel
+            : Model;
 
     /// <summary>Port number parsed from LlamaCppUrl (e.g. "http://localhost:8080" → 8080).</summary>
     public int LlamaCppPort
     {
         get
         {
-            var m = System.Text.RegularExpressions.Regex.Match(LlamaCppUrl, @":(\d+)");
+            var m = System.Text.RegularExpressions.Regex.Match(LlamaCppUrl ?? string.Empty, @":(\d+)");
             return m.Success ? int.Parse(m.Groups[1].Value) : 8080;
         }
     }
@@ -93,5 +172,11 @@ public class LlmSettings
     /// <summary>One-line summary for the main menu header.</summary>
     public string Summary => IsLlamaCpp
         ? $"llama.cpp  [{LlamaCppUrl}]  model: {Model}  ctx:{ContextSize}"
-        : $"Ollama     [{OllamaUrl}]  model: {Model}  ctx:{ContextSize}";
+        : IsGemini
+            ? $"Gemini     [{GeminiUrl}]  model: {GeminiModel}"
+            : IsOpenRouter
+                ? $"OpenRouter [{OpenRouterUrl}]  model: {OpenRouterModel}"
+                : $"Ollama     [{OllamaUrl}]  model: {Model}  ctx:{ContextSize}";
+
+    private string NormalizedBackend => (Backend ?? string.Empty).Trim().ToLowerInvariant();
 }

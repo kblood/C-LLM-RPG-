@@ -1,259 +1,148 @@
-# C# RPG Backend with Ollama
+# C# Living-World RPG Backend
 
-A modular C# console-based RPG backend designed to work with local LLMs via Ollama. Built for extensibility into Godot, Unity, or other game engines.
+A .NET 8 RPG prototype with authoritative game rules and optional LLM narration. It runs as either a console game or a Blazor web app. Ollama is the default LLM backend; llama.cpp, Google Gemini, and OpenRouter are also supported.
 
-## Overview
+The LLM interprets free-form commands and narrates outcomes. Movement, combat, inventory, quests, crafting, progression, saves, and world changes remain authoritative C# state, so a model cannot invent rewards or bypass rules.
 
-This project provides:
-- **Game State Management**: Pure C# deterministic game logic (rooms, NPCs, inventory, quests)
-- **LLM Integration**: Ollama HTTP client for local model inference
-- **NPC AI**: Individual "brain" components for each NPC with personality and memory
-- **Game Master (GM)**: Orchestrates player actions, applies game logic, and narrates outcomes
-- **Console Interface**: Interactive game loop (extensible to Godot/Unity)
+## What is implemented
 
-## Architecture
+- Isolated game sessions with explicit starting loadouts
+- Rooms, locked exits, floor items, equipment, combat, merchants, gathering, and crafting
+- Turn-based world simulation with NPC patrols and renewable or permanently depleted resources
+- Structured quest objectives with one-time rewards and cumulative character leveling
+- Multi-stage world projects that can change rooms, routes, resources, and NPC locations
+- A complete Ravensholm restoration arc in Fantasy Quest
+- Versioned JSON saves, console autosave, and web Continue/Save controls
+- Provider-neutral LLM interface with Ollama, llama.cpp, Gemini, and OpenRouter clients
+- Console and Blazor front ends
 
-```
-src/
-├── Core/
-│   └── GameState.cs          # Main game world state
-├── Models/
-│   ├── Character.cs          # Player & NPC definitions
-│   ├── Room.cs              # Location definitions
-│   ├── Inventory.cs         # Item management
-│   ├── Item.cs              # Item data
-│   └── Quest.cs             # Quest tracking
-├── LLM/
-│   ├── OllamaClient.cs      # HTTP client for local models
-│   └── NpcBrain.cs          # Individual NPC AI behavior
-└── Services/
-    └── GameMaster.cs        # Game orchestration & narration
-```
+## Requirements
 
-## Prerequisites
+- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+- Optionally, one supported LLM service for free-form interpretation, NPC dialogue, and narration. Direct commands continue to work when no provider is available.
 
-1. **Ollama** running locally:
-   ```bash
-   # Install from https://ollama.ai
-   ollama serve
-   # In another terminal, pull a model:
-   ollama pull mistral  # or qwen, llama2, etc.
-   ```
+## Quick start with Ollama
 
-2. **.NET 8.0 or later**
-
-## Quick Start
-
-### 1. Set Up Ollama
-
-```bash
-# Start Ollama server (listens on http://localhost:11434 by default)
+```powershell
 ollama serve
-
-# In another terminal, download a model
-ollama pull mistral
-```
-
-### 2. Run the Game
-
-```bash
-cd C:\Devstuff\git\CSharpRPGBackend
+ollama pull granite4:3b
 dotnet run
 ```
 
-### 3. Play
+Choose a game from the menu. Settings can be changed without editing source code.
 
-```
-> Town Square
-What do you do? look
+To run the web UI:
 
-Narrating your action...
-You find yourself in a bustling marketplace...
-
-What do you do? talk merchant
-What do you say? Hello, do you have any quests?
-
-Thinking...
-Thadeus the Merchant: I've heard rumors of bandits in the forest...
+```powershell
+dotnet run --project RPGWeb
 ```
 
-## Game Commands
+The web server binds to `http://127.0.0.1:5100` by default. A server operator can deliberately expose a different trusted address through configuration key `ListenUrl` or `RPGWEB_LISTEN_URL`, for example `$env:RPGWEB_LISTEN_URL = "http://0.0.0.0:5100"`. Provider endpoints are server-managed and cannot be edited in the browser. Backend and model changes made in the web settings page apply only to that browser session and do not rewrite the server's settings file. Web saves are isolated per browser by a random HttpOnly cookie and stored beneath `saves/web/<browser-slot>/`; clearing that cookie starts a new save slot.
 
-| Command | Example | Description |
-|---------|---------|-------------|
-| `look` | `look` | Examine current surroundings |
-| `move` | `move forest` | Travel to adjacent location |
-| `talk` | `talk merchant` | Speak with an NPC |
-| `inventory` | `inventory` | Check your items |
-| `take` | `take sword` | Pick up an item |
-| `drop` | `drop coin` | Drop an item |
-| `attack` | `attack goblin` | Combat action |
-| `status` | `status` | Get narrative game status |
-| `help` | `help` | Show available actions |
-| `quit` | `quit` | Exit the game |
+## LLM backends
 
-## Customization
+Configuration is stored in `llm-settings.json`. API keys are deliberately excluded from that file and from command-line arguments; cloud credentials come from environment variables.
 
-### Changing the LLM Model
+| Backend | `--backend` value | Default model | Credential |
+|---|---|---|---|
+| Ollama | `ollama` | `granite4:3b` | None |
+| llama.cpp | `llamacpp` | `granite4:3b` | None |
+| Google Gemini | `gemini` | `gemini-3.6-flash` | `GEMINI_API_KEY` |
+| OpenRouter | `openrouter` | `openrouter/auto` | `OPENROUTER_API_KEY` |
 
-Edit `Program.cs`:
-```csharp
-const string ollamaModel = "qwen";  // Options: mistral, qwen, llama2, neural-chat, etc.
+### Console settings
+
+Open **Settings** from the main menu, or supply non-secret overrides:
+
+```powershell
+dotnet run -- --backend=ollama --model=granite4:3b
+dotnet run -- --backend=llamacpp --llamacpp-url=http://localhost:8080
+dotnet run -- --backend=gemini --model=gemini-3.6-flash
+dotnet run -- --backend=openrouter --model=openrouter/auto
 ```
 
-### Customizing NPC Personalities
+The supported URL overrides are `--ollama-url`, `--llamacpp-url`, `--gemini-url`, and `--openrouter-url`. `LLM_BACKEND` is also accepted as an environment override.
 
-In `GameMaster.cs`, modify `GenerateNpcPersonality()` or set custom prompts:
-```csharp
-var npc = gameState.NPCs["merchant"];
-npc.PersonalityPrompt = @"You are a greedy merchant obsessed with profit...";
+### Gemini
+
+```powershell
+$env:GEMINI_API_KEY = "your-key"
+dotnet run -- --backend=gemini --model=gemini-3.6-flash
 ```
 
-### Adding New Rooms
+The client uses Gemini's `generateContent` and streaming endpoints and sends the key in the `x-goog-api-key` header. See the [official Gemini API reference](https://ai.google.dev/api/generate-content).
 
-In `GameState.cs`, add to `InitializeDefaultGame()`:
-```csharp
-Rooms["dungeon"] = new Room
-{
-    Id = "dungeon",
-    Name = "Dark Dungeon",
-    Description = "A damp, foreboding cave...",
-    ConnectedRooms = new() { "forest" },
-    NPCIds = new() { "dungeon_master" }
-};
+### OpenRouter
+
+```powershell
+$env:OPENROUTER_API_KEY = "your-key"
+dotnet run -- --backend=openrouter --model=openrouter/auto
 ```
 
-### Adding New NPCs
+`openrouter/auto` lets OpenRouter select a suitable available model. You can instead enter any model ID exposed by the provider. See the [OpenRouter quickstart](https://openrouter.ai/docs/quickstart) and [Auto Router guide](https://openrouter.ai/docs/guides/routing/routers/auto-router).
 
-Add to the `NPCs` dictionary in `GameState.cs` and initialize their brain in `GameMaster.InitializeNpcBrains()`.
+For the web app, the same environment variables must be set before launching the server. Secrets are not shown or accepted by the settings page.
 
-## Integration with Godot/Unity
+## Playing the game
 
-To integrate into a game engine:
+Free-form requests are accepted, but direct commands are useful when playing without a healthy LLM connection.
 
-1. **Keep Core Logic**: Move `src/Core/` and `src/Models/` to a shared library
-2. **Replace Console**: Implement `IGameInterface` instead of `Program.cs`
-3. **Attach to Game Objects**: Create Godot/Unity components that use `OllamaClient` and `NpcBrain`
+| Command | Example |
+|---|---|
+| Inspect the area | `look` |
+| Travel | `move forest` |
+| Talk | `talk merchant` |
+| Fight | `attack goblin` |
+| Manage items | `inventory`, `take sword`, `drop potion` |
+| Use equipment | `equip sword`, `unequip sword`, `equipped` |
+| Trade | `shop`, `buy potion`, `sell sword` |
+| Gather and craft | `gather iron ore`, `recipes`, `craft iron sword` |
+| Track quests | `quests`, `accept <quest>`, `turn in <quest>` |
+| Grow the world | `projects`, `contribute 3 iron ore to forgeworks` |
+| Character info | `status` |
+| Persist immediately | `save` |
 
-Example Godot integration:
-```csharp
-[GlobalClass]
-public partial class NpcCharacter : CharacterBody3D
-{
-    private NpcBrain _brain;
-    private OllamaClient _ollamaClient;
+Looking at status, inventory, the room, quests, projects, recipes, or a shop does not advance time. Actions such as moving, fighting, gathering, crafting, and talking advance exactly one turn. Console progress autosaves after every processed action and when quitting under `saves/<game-id>.json`.
 
-    public override void _Ready()
-    {
-        _ollamaClient = new OllamaClient();
-        var npc = GetNpc(); // from game state
-        _brain = new NpcBrain(_ollamaClient, npc);
-    }
+## Living-world example: Ravensholm
 
-    public async void TalkToNpc(string playerMessage)
-    {
-        var response = await _brain.RespondToPlayerAsync(playerMessage);
-        DisplayDialogue(response);
-    }
-}
+Fantasy Quest includes a two-stage project rather than a purely static map:
+
+1. Defeat the Goblin King to reclaim the mine. The cave becomes safer and its iron resource improves.
+2. Contribute three iron ore to restore the Forgeworks. A new district opens, descriptions change, and the blacksmith relocates there.
+
+The reusable project model supports requirements based on events, quests, items, kills, locations, levels, and contributions. Effects can alter room descriptions and metadata, enable exits, add resources or floor items, and move NPCs. Definitions live in the game content while `WorldProjectService` applies them to runtime state.
+
+## Project layout
+
+```text
+src/
+  Core/       GameState and isolated runtime-state factory
+  Games/      Built-in game definitions
+  LLM/        Provider-neutral interface and provider clients
+  Models/     Items, characters, quests, saves, and living-world models
+  Services/   Game master, world simulation, progression, projects, and saves
+RPGWeb/       Blazor front end
+RPGGameEditor/ Desktop content editor
+tests/        xUnit regression suite
+games/        JSON-authored games and schemas
 ```
 
-## Extending Features
+## Build and test
 
-### Adding Combat System
-Implement a `CombatService` that uses the `Character` stats:
-```csharp
-public class CombatService
-{
-    public int CalculateDamage(Character attacker, Character defender)
-    {
-        // Roll dice, apply modifiers, etc.
-    }
-}
+```powershell
+dotnet build CSharpRPGBackend.sln
+dotnet test CSharpRPGBackend.sln
 ```
 
-### Adding Quest System
-Use the `Quest` model to create a `QuestService`:
-```csharp
-public class QuestService
-{
-    public void CompleteObjective(string questId, string objectiveId) { }
-    public void RewardPlayer(Character player, Quest quest) { }
-}
-```
+The regression suite covers runtime-state isolation, loadouts, leveling, world ticks, quest reward idempotence, the Ravensholm transformation, save round-trips, all LLM factories, credential serialization safety, and GameMaster turn/item/lock behavior.
 
-### Streaming Responses
-Use `ChatStreamAsync` for long NPC speeches:
-```csharp
-await foreach (var chunk in _brain.RespondToPlayerStreamAsync(message))
-{
-    Console.Write(chunk); // Stream output to UI
-}
-```
+## Adding content
 
-## LLM Selection Guide
+Games can be authored in C# under `src/Games` or loaded from JSON under `games`. JSON `game.json` files may include a `worldProjects` array using the same project, stage, condition, and effect fields as the C# models. Use catalog item IDs for starting loadouts, quest requirements, resources, recipes, and project contributions. `GameStateFactory` clones authored definitions into each new runtime so one session cannot mutate another.
 
-| Model | Best For | Speed | Memory |
-|-------|----------|-------|--------|
-| `mistral` | General RPG narration | Fast | ~7GB |
-| `qwen` | Coherent dialogue | Medium | ~8GB |
-| `llama2` | Roleplay-heavy | Medium | ~13GB |
-| `neural-chat` | Conversational NPCs | Fast | ~7GB |
-| `orca-mini` | Lightweight | Very Fast | ~3GB |
-
-## Project Structure for Future Expansion
-
-```
-CSharpRPGBackend/
-├── Backend/
-│   ├── src/
-│   ├── Program.cs
-│   └── CSharpRPGBackend.csproj
-├── GodotIntegration/
-│   └── (Godot 4 C# project)
-├── UnityIntegration/
-│   └── (Unity C# project)
-└── Shared/
-    └── (Common core library)
-```
-
-## Troubleshooting
-
-**"ERROR: Cannot connect to Ollama"**
-- Make sure `ollama serve` is running
-- Check that Ollama is on `http://localhost:11434`
-- Modify `ollamaUrl` in `Program.cs` if needed
-
-**"Model not found"**
-```bash
-ollama pull mistral
-```
-
-**LLM responses are slow**
-- Use a faster, smaller model like `neural-chat` or `orca-mini`
-- Reduce conversation history kept in `NpcBrain.cs`
-
-## Future Enhancements
-
-- [ ] Full quest system with branching dialogue
-- [ ] Dynamic NPC relationship tracking
-- [ ] Persistent world state (save/load)
-- [ ] Multi-turn narrative sequences
-- [ ] Web API layer (for remote Godot/Unity clients)
-- [ ] LLamaSharp integration for in-process models
-- [ ] Support for multiple LLM providers (OpenAI, Anthropic)
-
-## References
-
-- [Ollama Documentation](https://ollama.ai/)
-- [GPT-OSS C# + Ollama Guide](https://devblogs.microsoft.com/dotnet/gpt-oss-csharp-ollama/)
-- [Local LLM NPC with Godot 4](https://github.com/code-forge-temple/local-llm-npc)
-- [LLamaSharp Repository](https://github.com/SciSharp/LLamaSharp)
+For a growing world, add `WorldProject` definitions to a game and compose stages from `WorldProjectRequirement` and `WorldProjectEffect`. Keep gameplay consequences in services and use the LLM only to phrase the resulting events.
 
 ## License
 
-MIT - Feel free to extend and use in your projects.
-
----
-
-**Next Steps**: Follow the instructions you'll paste to customize this backend further!
+MIT

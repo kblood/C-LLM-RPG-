@@ -112,8 +112,31 @@ public class Character
 
     public void GainExperience(int amount)
     {
+        if (amount <= 0)
+            return;
+
         Experience += amount;
-        // TODO: Check for level up
+
+        while (Experience >= GetExperienceRequiredForLevel(Level + 1))
+        {
+            Level++;
+            MaxHealth += 10;
+            Health = Math.Min(MaxHealth, Health + 10);
+            Strength++;
+            Agility++;
+        }
+    }
+
+    /// <summary>
+    /// Returns the cumulative experience required to reach a level.
+    /// Each new level costs 100 XP more than the previous one.
+    /// </summary>
+    public static int GetExperienceRequiredForLevel(int level)
+    {
+        if (level <= 1)
+            return 0;
+
+        return checked(50 * level * (level - 1));
     }
 
     /// <summary>

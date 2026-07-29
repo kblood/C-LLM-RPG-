@@ -111,6 +111,14 @@ public class Item
     public bool CanBeTaken { get; set; } = true;
     public bool Cursed { get; set; } = false;
     public Dictionary<string, object> CustomProperties { get; set; } = new();
+
+    /// <summary>
+    /// Creates an independent runtime copy of this item definition.
+    /// Mutable values such as consumable uses, effects, pricing, biome lists, and
+    /// custom properties are copied so changing the returned item does not alter
+    /// the definition or another item instance.
+    /// </summary>
+    public Item CloneRuntime() => GameStateFactory.CreateItemInstance(this);
 }
 
 public enum ItemType

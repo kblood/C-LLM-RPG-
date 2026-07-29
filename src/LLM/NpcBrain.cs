@@ -63,7 +63,7 @@ public class NpcBrain
 
             return response;
         }
-        catch (Exception ex) when (ex is OllamaException or LlamaCppException)
+        catch (LlmClientException)
         {
             return $"*{_npc.Name} seems confused and cannot speak.*";
         }

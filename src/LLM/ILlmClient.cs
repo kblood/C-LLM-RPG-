@@ -1,3 +1,5 @@
+using System.Net;
+
 namespace CSharpRPGBackend.LLM;
 
 /// <summary>
@@ -37,4 +39,26 @@ public interface ILlmClient
     /// Returns an empty list when the backend is unreachable or does not support listing.
     /// </summary>
     Task<List<string>> ListModelsAsync();
+}
+
+/// <summary>
+/// Base exception for failures reported by an <see cref="ILlmClient"/>.
+/// Provider implementations use this type to expose safe status information
+/// without including credentials or request headers in exception messages.
+/// </summary>
+public class LlmClientException : Exception
+{
+    public HttpStatusCode? StatusCode { get; }
+    public string? ProviderErrorCode { get; }
+
+    public LlmClientException(
+        string message,
+        Exception? innerException = null,
+        HttpStatusCode? statusCode = null,
+        string? providerErrorCode = null)
+        : base(message, innerException)
+    {
+        StatusCode = statusCode;
+        ProviderErrorCode = providerErrorCode;
+    }
 }

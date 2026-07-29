@@ -25,10 +25,14 @@
     }
     else
     {
+        @if (!string.IsNullOrWhiteSpace(continueError))
+        {
+            <div class="error-box">@continueError</div>
+        }
         <div class="game-grid">
             @foreach (var (name, game) in games)
             {
-                <div class="game-card" @onclick="() => SelectGame(game)">
+                <div class="game-card">
                     <h2>@game.Title</h2>
                     @if (!string.IsNullOrEmpty(game.Subtitle))
                     {
@@ -46,7 +50,11 @@
                         @if (game.HasCombat) { <span>Combat</span> }
                         @if (game.Economy?.Enabled == true) { <span>Economy</span> }
                     </div>
-                    <button class="play-btn">Play</button>
+                    <button class="play-btn" @onclick="() => SelectGame(game)">New Game</button>
+                    @if (Session.HasSave(game))
+                    {
+                        <button class="play-btn" @onclick="() => ContinueGameAsync(game)">Continue</button>
+                    }
                 </div>
             }
         </div>
@@ -57,6 +65,7 @@
     private List<(string name, CSharpRPGBackend.Core.Game game)>? games;
     private bool loading = true;
     private bool llmHealthy;
+    private string? continueError;
 
     protected override async Task OnInitializedAsync()
     {
@@ -69,5 +78,19 @@
     {
         Session.StartGame(game);
         Nav.NavigateTo("/play");
+    }
+
+    private async Task ContinueGameAsync(CSharpRPGBackend.Core.Game game)
+    {
+        continueError = null;
+        try
+        {
+            await Session.LoadGameAsync(game);
+            Nav.NavigateTo("/play");
+        }
+        catch (Exception ex)
+        {
+            continueError = $"Could not load the save for {game.Title}: {ex.Message}";
+        }
     }
 }

@@ -11,6 +11,9 @@ public class Inventory
 
     public bool AddItem(Item item, int quantity = 1)
     {
+        if (quantity <= 0)
+            return false;
+
         int weight = item.Weight * quantity;
         if (CurrentWeight + weight > MaxWeight)
             return false;
@@ -31,18 +34,14 @@ public class Inventory
 
     public bool RemoveItem(string itemId, int quantity = 1)
     {
-        if (!Items.ContainsKey(itemId))
+        if (quantity <= 0 || !Items.TryGetValue(itemId, out var inventoryItem) || inventoryItem.Quantity < quantity)
             return false;
 
-        Items[itemId].Quantity -= quantity;
-        if (Items[itemId].Quantity <= 0)
+        inventoryItem.Quantity -= quantity;
+        CurrentWeight -= inventoryItem.Item.Weight * quantity;
+        if (inventoryItem.Quantity == 0)
         {
-            CurrentWeight -= Items[itemId].Item.Weight * quantity;
             Items.Remove(itemId);
-        }
-        else
-        {
-            CurrentWeight -= Items[itemId].Item.Weight * quantity;
         }
 
         return true;

@@ -14,6 +14,12 @@ public class GameState
     public List<Quest> ActiveQuests { get; set; } = new();
     public List<string> RecentPlayerCommands { get; set; } = new(); // Track last N player commands for LLM context
 
+    // Living-world state. These fields are deterministic and included in save files.
+    public int TurnNumber { get; set; } = 0;
+    public int WorldSeed { get; set; } = 1;
+    public List<WorldEvent> RecentWorldEvents { get; set; } = new();
+    public List<WorldProject> WorldProjects { get; set; } = new();
+
     // Party and Companions
     public List<string> Companions { get; set; } = new(); // NPC IDs of companions following the player
 
