@@ -1,5 +1,24 @@
 @inherits LayoutComponentBase
 
 <div class="app-layout">
+    @if (interactiveReady)
+    {
+        <span data-testid="interactive-ready" hidden></span>
+    }
     @Body
 </div>
+
+@code {
+    private bool interactiveReady;
+
+    protected override Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            interactiveReady = true;
+            StateHasChanged();
+        }
+
+        return Task.CompletedTask;
+    }
+}

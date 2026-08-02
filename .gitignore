@@ -40,6 +40,11 @@ appsettings.local.json
 # OS-specific
 .DS_Store
 Thumbs.db
+/nul
+
+# Runtime save data
+/saves/
+RPGWeb/saves/
 
 # IDE
 .idea/

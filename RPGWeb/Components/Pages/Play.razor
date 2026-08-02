@@ -20,14 +20,14 @@
         </button>
         <div class="sidebar-content">
             <h2>@Session.CurrentGame!.Title</h2>
-            <p>Turn @Session.State!.TurnNumber · Level @Session.State.Player.Level · @Session.State.Player.Experience XP</p>
+            <p data-testid="turn-summary">Turn @Session.State!.TurnNumber · Level @Session.State.Player.Level · @Session.State.Player.Experience XP</p>
 
             @{ var room = Session.GetCurrentRoom(); }
             @if (room != null)
             {
                 <section>
                     <h3>Location</h3>
-                    <p class="room-name">@room.Name</p>
+                    <p class="room-name" data-testid="current-room">@room.Name</p>
                 </section>
             }
 
@@ -242,7 +242,7 @@
                 <button class="btn-end" @onclick="SaveGameAsync" disabled="@Session.IsProcessing">Save Game</button>
                 @if (!string.IsNullOrWhiteSpace(Session.LastSaveStatus))
                 {
-                    <small>@Session.LastSaveStatus</small>
+                    <small data-testid="save-status">@Session.LastSaveStatus</small>
                 }
                 <button class="btn-end" @onclick="EndGame">End Game</button>
             </section>
@@ -283,6 +283,7 @@
                     var chatNpcInput = Session.GetChatNpc();
                     var npcNameForPlaceholder = chatNpcInput?.Name ?? "NPC";
                     <input @ref="inputRef"
+                           data-testid="command-input"
                            @bind="playerInput"
                            @bind:event="oninput"
                            @onkeydown="HandleKeyDown"
@@ -293,6 +294,7 @@
                 else
                 {
                     <input @ref="inputRef"
+                           data-testid="command-input"
                            @bind="playerInput"
                            @bind:event="oninput"
                            @onkeydown="HandleKeyDown"
@@ -300,7 +302,7 @@
                            disabled="@Session.IsProcessing"
                            autocomplete="off" />
                 }
-                <button @onclick="SubmitAction" disabled="@(Session.IsProcessing || string.IsNullOrWhiteSpace(playerInput))">
+                <button data-testid="command-submit" @onclick="SubmitAction" disabled="@(Session.IsProcessing || string.IsNullOrWhiteSpace(playerInput))">
                     Send
                 </button>
             </div>

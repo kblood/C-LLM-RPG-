@@ -17,6 +17,7 @@ public class GameSessionService
 {
     private readonly LlmSettings _settings;
     private readonly BrowserSaveSlot _saveSlot;
+    private readonly string _dataDirectory;
     private ILlmClient _activeClient;   // recreated when settings change
     private GameState? _gameState;
     private GameMaster? _gameMaster;
@@ -34,13 +35,21 @@ public class GameSessionService
     public string? LlmStatus { get; private set; }
     public string? LastSaveStatus { get; private set; }
 
-    public GameSessionService(LlmSettings settings, BrowserSaveSlot saveSlot)
+    public GameSessionService(
+        LlmSettings settings,
+        BrowserSaveSlot saveSlot,
+        IConfiguration configuration)
     {
         // The registered settings object is server-wide configuration. Each
         // circuit gets an independent runtime copy so one browser cannot change
         // another browser's provider/model selection or rewrite server settings.
         _settings = settings.CreateRuntimeCopy();
         _saveSlot = saveSlot;
+        var configuredDataDirectory = configuration["RPGWEB_DATA_DIRECTORY"];
+        _dataDirectory = Path.GetFullPath(
+            string.IsNullOrWhiteSpace(configuredDataDirectory)
+                ? Directory.GetCurrentDirectory()
+                : configuredDataDirectory);
         _activeClient = _settings.CreateClient();
     }
 
@@ -296,7 +305,7 @@ public class GameSessionService
         var saveFileName = $"{safeGameId}-{gameIdHash}.json";
 
         return Path.Combine(
-            Directory.GetCurrentDirectory(),
+            _dataDirectory,
             "saves",
             "web",
             _saveSlot.Id,

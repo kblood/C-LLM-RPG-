@@ -58,6 +58,8 @@ app.UseStaticFiles();
 app.UseMiddleware<BrowserSaveSlotCookieMiddleware>();
 app.UseAntiforgery();
 
+app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
+
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 

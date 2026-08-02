@@ -124,7 +124,7 @@ src/
   Services/   Game master, world simulation, progression, projects, and saves
 RPGWeb/       Blazor front end
 RPGGameEditor/ Desktop content editor
-tests/        xUnit regression suite
+tests/        Core xUnit and Playwright browser regression suites
 games/        JSON-authored games and schemas
 ```
 
@@ -132,10 +132,20 @@ games/        JSON-authored games and schemas
 
 ```powershell
 dotnet build CSharpRPGBackend.sln
-dotnet test CSharpRPGBackend.sln
+dotnet test tests/CSharpRPGBackend.Tests/CSharpRPGBackend.Tests.csproj
 ```
 
-The regression suite covers runtime-state isolation, loadouts, leveling, world ticks, quest reward idempotence, the Ravensholm transformation, save round-trips, all LLM factories, credential serialization safety, and GameMaster turn/item/lock behavior.
+The core regression suite covers runtime-state isolation, loadouts, leveling, world ticks, quest reward idempotence, the Ravensholm transformation, save round-trips, all LLM factories, credential serialization safety, and GameMaster turn/item/lock behavior.
+
+The browser suite launches the real Blazor Server app and verifies autosave, refresh/continue behavior, and save isolation between independent browsers. Install its Chromium build once before running it locally:
+
+```powershell
+dotnet build tests/RPGWeb.E2ETests/RPGWeb.E2ETests.csproj
+pwsh tests/RPGWeb.E2ETests/bin/Debug/net8.0/playwright.ps1 install chromium
+dotnet test tests/RPGWeb.E2ETests/RPGWeb.E2ETests.csproj --no-build
+```
+
+Set `RPGWEB_DATA_DIRECTORY` to redirect runtime saves from the repository root. The browser suite uses a unique temporary directory automatically. GitHub Actions runs the build, core tests, and browser test for every push and pull request.
 
 ## Adding content
 

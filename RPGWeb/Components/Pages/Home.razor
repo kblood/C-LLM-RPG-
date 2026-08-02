@@ -32,7 +32,7 @@
         <div class="game-grid">
             @foreach (var (name, game) in games)
             {
-                <div class="game-card">
+                <div class="game-card" data-testid="game-card-@game.Id">
                     <h2>@game.Title</h2>
                     @if (!string.IsNullOrEmpty(game.Subtitle))
                     {
@@ -50,10 +50,10 @@
                         @if (game.HasCombat) { <span>Combat</span> }
                         @if (game.Economy?.Enabled == true) { <span>Economy</span> }
                     </div>
-                    <button class="play-btn" @onclick="() => SelectGame(game)">New Game</button>
+                    <button class="play-btn" data-testid="new-game-@game.Id" @onclick="() => SelectGame(game)">New Game</button>
                     @if (Session.HasSave(game))
                     {
-                        <button class="play-btn" @onclick="() => ContinueGameAsync(game)">Continue</button>
+                        <button class="play-btn" data-testid="continue-game-@game.Id" @onclick="() => ContinueGameAsync(game)">Continue</button>
                     }
                 </div>
             }

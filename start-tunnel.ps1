@@ -34,23 +34,34 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "Build OK." -ForegroundColor Green
 Write-Host ""
 
-# --- Step 2: Start web server as background job ---
-Write-Host "Starting RPGWeb on port $Port..." -ForegroundColor Yellow
-$webJob = Start-Job -ScriptBlock {
-    param($dir, $port)
-    Set-Location $dir
-    $env:RPGWEB_LISTEN_URL = "http://127.0.0.1:$port"
-    dotnet run --project RPGWeb --no-build
-} -ArgumentList $ProjectDir, $Port
-
-# Wait for server to be ready
+# --- Step 2: Start web server as background job when needed ---
+$healthUrl = "http://127.0.0.1:$Port/healthz"
+$webJob = $null
 $ready = $false
-for ($i = 0; $i -lt 20; $i++) {
-    Start-Sleep -Seconds 1
-    try {
-        $r = Invoke-WebRequest "http://localhost:$Port" -UseBasicParsing -TimeoutSec 1 -ErrorAction Stop
-        $ready = $true; break
-    } catch {}
+try {
+    $healthResponse = Invoke-WebRequest $healthUrl -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+    $ready = $healthResponse.StatusCode -eq 200
+} catch {}
+
+if ($ready) {
+    Write-Host "Reusing the healthy RPGWeb server already running on port $Port." -ForegroundColor Green
+} else {
+    Write-Host "Starting RPGWeb on port $Port..." -ForegroundColor Yellow
+    $webJob = Start-Job -ScriptBlock {
+        param($dir, $port)
+        Set-Location $dir
+        $env:RPGWEB_LISTEN_URL = "http://127.0.0.1:$port"
+        dotnet run --project RPGWeb --no-build
+    } -ArgumentList $ProjectDir, $Port
+
+    for ($i = 0; $i -lt 30; $i++) {
+        Start-Sleep -Milliseconds 500
+        try {
+            $healthResponse = Invoke-WebRequest $healthUrl -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+            $ready = $healthResponse.StatusCode -eq 200
+            if ($ready) { break }
+        } catch {}
+    }
 }
 
 if ($ready) {
@@ -83,7 +94,9 @@ try {
     # Ctrl+C cleanup
     Write-Host ""
     Write-Host "Stopping RPGWeb..." -ForegroundColor Yellow
-    Stop-Job $webJob -ErrorAction SilentlyContinue
-    Remove-Job $webJob -ErrorAction SilentlyContinue
+    if ($null -ne $webJob) {
+        Stop-Job $webJob -ErrorAction SilentlyContinue
+        Remove-Job $webJob -ErrorAction SilentlyContinue
+    }
     Write-Host "Stopped." -ForegroundColor Gray
 }
